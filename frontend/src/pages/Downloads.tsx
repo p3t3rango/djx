@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Trash2, ChevronLeft, ChevronRight, Search, Loader2, Play, Pause, Edit3, Check, X, ListPlus, AudioWaveform, Zap, Upload, FolderOpen, ToggleLeft, ToggleRight, Sparkles } from 'lucide-react';
+import { Trash2, ChevronLeft, ChevronRight, Search, Loader2, Play, Pause, Edit3, Check, X, ListPlus, AudioWaveform, Zap, Upload, FolderOpen, ToggleLeft, ToggleRight, Sparkles, Tag, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import { usePlayer, type PlayerTrack } from '../components/PlayerContext';
 import TrackDetail from '../components/TrackDetail';
@@ -31,12 +31,33 @@ export default function Downloads() {
   const [camelotMode, setCamelotMode] = useState(true);
   const [findingTastemakers, setFindingTastemakers] = useState(false);
   const [tastemakerMsg, setTastemakerMsg] = useState('');
+  const [tags, setTags] = useState<any[]>([]);
+  const [selectedTag, setSelectedTag] = useState<number | null>(null);
+  const [showTagMenu, setShowTagMenu] = useState<number | null>(null);
+  const [trackTagsMap, setTrackTagsMap] = useState<Record<number, any[]>>({});
+  const [showCreateTag, setShowCreateTag] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#00ffc8');
   const player = usePlayer();
   const pageSize = 30;
 
   useEffect(() => {
     api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
+    loadTags();
   }, []);
+
+  const loadTags = () => api.getTags().then(setTags);
+
+  // Load tags for visible tracks
+  useEffect(() => {
+    downloads.forEach(d => {
+      if (!trackTagsMap[d.track_id]) {
+        api.getTrackTags(d.track_id).then(t => {
+          setTrackTagsMap(prev => ({ ...prev, [d.track_id]: t }));
+        });
+      }
+    });
+  }, [downloads]);
 
   useEffect(() => {
     const g = searchParams.get('genre') || '';
@@ -174,11 +195,42 @@ export default function Downloads() {
     loadDownloads();
   };
 
+  const createTag = async () => {
+    if (!newTagName.trim()) return;
+    await api.createTag(newTagName.trim(), newTagColor);
+    setNewTagName('');
+    setShowCreateTag(false);
+    loadTags();
+  };
+
+  const assignTag = async (trackId: number, tagId: number) => {
+    await api.tagTrack(trackId, tagId);
+    const updated = await api.getTrackTags(trackId);
+    setTrackTagsMap(prev => ({ ...prev, [trackId]: updated }));
+    setShowTagMenu(null);
+    loadTags();
+  };
+
+  const removeTag = async (trackId: number, tagId: number) => {
+    await api.untagTrack(trackId, tagId);
+    const updated = await api.getTrackTags(trackId);
+    setTrackTagsMap(prev => ({ ...prev, [trackId]: updated }));
+    loadTags();
+  };
+
   const formatSize = (b: number | null) => { if (!b) return '-'; return b >= 1e6 ? `${(b/1e6).toFixed(1)}MB` : `${(b/1e3).toFixed(0)}KB`; };
 
-  const filtered = searchQuery
+  let filtered = searchQuery
     ? downloads.filter(d => (d.title||'').toLowerCase().includes(searchQuery.toLowerCase()) || (d.artist||'').toLowerCase().includes(searchQuery.toLowerCase()))
     : downloads;
+
+  // Filter by tag
+  if (selectedTag) {
+    filtered = filtered.filter(d => {
+      const tt = trackTagsMap[d.track_id];
+      return tt && tt.some((t: any) => t.id === selectedTag);
+    });
+  }
 
   const analyzedCount = downloads.filter(d => d.bpm != null).length;
   const unanalyzedCount = downloads.filter(d => d.bpm == null && d.file_path).length;
@@ -339,8 +391,63 @@ export default function Downloads() {
         </div>
       )}
 
+      {/* Tags */}
+      {tags.length > 0 && (
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
+          <Tag size={12} className="text-[var(--color-text-dim)]" />
+          <button onClick={() => setSelectedTag(null)}
+            className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors ${!selectedTag ? 'bg-[var(--color-surface-3)] text-[var(--color-text)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'}`}>
+            ALL
+          </button>
+          {tags.map(tag => (
+            <button key={tag.id} onClick={() => setSelectedTag(selectedTag === tag.id ? null : tag.id)}
+              className={`px-2 py-0.5 rounded text-[10px] font-mono flex items-center gap-1 transition-colors ${
+                selectedTag === tag.id ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)]'
+              }`}
+              style={{ borderLeft: `3px solid ${tag.color}`, background: selectedTag === tag.id ? tag.color + '20' : 'transparent' }}>
+              {tag.name} <span className="opacity-50">{tag.track_count}</span>
+            </button>
+          ))}
+          <button onClick={() => setShowCreateTag(!showCreateTag)}
+            className="p-1 text-[var(--color-text-dim)] hover:text-[var(--color-glow)]" title="New tag">
+            <Plus size={12} />
+          </button>
+          {showCreateTag && (
+            <div className="flex items-center gap-1">
+              <input type="color" value={newTagColor} onChange={e => setNewTagColor(e.target.value)}
+                className="w-6 h-6 rounded border-none cursor-pointer" />
+              <input value={newTagName} onChange={e => setNewTagName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && createTag()}
+                placeholder="Tag name"
+                className="w-24 bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded px-2 py-0.5 text-[10px] font-mono text-[var(--color-text)]" />
+              <button onClick={createTag} className="text-[10px] font-mono text-[var(--color-glow)]">ADD</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tags.length === 0 && (
+        <div className="flex items-center gap-2 mb-4">
+          <button onClick={() => setShowCreateTag(!showCreateTag)}
+            className="flex items-center gap-1.5 px-3 py-1 rounded text-[10px] font-mono border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-glow)] transition-colors">
+            <Tag size={11} /> CREATE TAGS
+          </button>
+          {showCreateTag && (
+            <div className="flex items-center gap-1">
+              <input type="color" value={newTagColor} onChange={e => setNewTagColor(e.target.value)}
+                className="w-6 h-6 rounded border-none cursor-pointer" />
+              <input value={newTagName} onChange={e => setNewTagName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && createTag()}
+                placeholder="Tag name"
+                className="w-24 bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded px-2 py-0.5 text-[10px] font-mono text-[var(--color-text)]" />
+              <button onClick={createTag} className="text-[10px] font-mono text-[var(--color-glow)]">ADD</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Genre pills */}
-      {!selectedGenre && genres.length > 0 && (
+      {!selectedGenre && !selectedTag && genres.length > 0 && (
         <div className="flex gap-2 mb-4 flex-wrap">
           {genres.map(g => (
             <button key={g} onClick={() => changeGenre(g)}
@@ -366,6 +473,7 @@ export default function Downloads() {
               <th className="text-right px-2 py-2.5 tracking-wider">BPM</th>
               <th className="text-left px-2 py-2.5 tracking-wider">KEY</th>
               <th className="text-left px-2 py-2.5 tracking-wider">GENRE</th>
+              <th className="text-left px-2 py-2.5 tracking-wider">TAGS</th>
               <th className="text-right px-2 py-2.5 tracking-wider">SIZE</th>
               <th className="w-20"></th>
             </tr>
@@ -422,6 +530,37 @@ export default function Downloads() {
                       <button onClick={() => changeGenre(d.genre_folder)} className="text-[var(--color-text-dim)] hover:text-[var(--color-glow)] transition-colors">{d.genre_folder}</button>
                     )}
                   </td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center gap-1 flex-wrap relative">
+                      {(trackTagsMap[d.track_id] || []).map((tag: any) => (
+                        <span key={tag.id}
+                          className="px-1.5 py-0 rounded text-[9px] font-mono text-[var(--color-text)] cursor-pointer hover:opacity-70"
+                          style={{ background: tag.color + '30', borderLeft: `2px solid ${tag.color}` }}
+                          onClick={() => removeTag(d.track_id, tag.id)}
+                          title={`Click to remove "${tag.name}"`}>
+                          {tag.name}
+                        </span>
+                      ))}
+                      <button onClick={() => setShowTagMenu(showTagMenu === d.track_id ? null : d.track_id)}
+                        className="p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-glow)] transition-colors" title="Add tag">
+                        <Plus size={10} />
+                      </button>
+                      {showTagMenu === d.track_id && tags.length > 0 && (
+                        <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-surface)] border border-[var(--color-border)] rounded shadow-lg py-1 min-w-[100px]">
+                          {tags.filter(tag => !(trackTagsMap[d.track_id] || []).some((tt: any) => tt.id === tag.id)).map(tag => (
+                            <button key={tag.id} onClick={() => assignTag(d.track_id, tag.id)}
+                              className="w-full text-left px-3 py-1 text-[10px] font-mono text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-3)] flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full" style={{ background: tag.color }} />
+                              {tag.name}
+                            </button>
+                          ))}
+                          {tags.filter(tag => !(trackTagsMap[d.track_id] || []).some((tt: any) => tt.id === tag.id)).length === 0 && (
+                            <span className="px-3 py-1 text-[9px] font-mono text-[var(--color-text-dim)]">All tags assigned</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-2 py-2 text-right text-[var(--color-text-dim)]">{formatSize(d.file_size_bytes)}</td>
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-0.5">
@@ -445,7 +584,7 @@ export default function Downloads() {
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={9} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
+              <tr><td colSpan={10} className="px-4 py-10 text-center text-[var(--color-text-dim)]">
                 {searchQuery ? 'NO MATCHING TRACKS' : 'NO DOWNLOADS FOUND'}
               </td></tr>
             )}
