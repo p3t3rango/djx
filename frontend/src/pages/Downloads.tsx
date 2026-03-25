@@ -137,7 +137,28 @@ export default function Downloads() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    setAnalyzeMsg(data.error ? `Error: ${data.error}` : `Exported ${data.exported} tracks`);
+    setAnalyzeMsg(data.error ? `Error: ${data.error}` : `Exported ${data.exported} tracks (XML)`);
+  };
+
+  const exportUSB = async () => {
+    // Open native folder picker
+    const res = await fetch('/api/pick-folder');
+    const data = await res.json();
+    if (!data.path) return;
+
+    setAnalyzeMsg('Exporting to USB...');
+    const trackIds = selected.size > 0 ? Array.from(selected) : undefined;
+    const { task_id } = await api.exportUSB(data.path, trackIds);
+
+    const poll = setInterval(async () => {
+      const status = await fetch(`/api/analysis/status/${task_id}`).then(r => r.json());
+      setAnalyzeMsg(status.message || status.status);
+      if (status.status === 'completed' || status.status === 'failed') {
+        clearInterval(poll);
+        if (status.result) setAnalyzeMsg(`CDJ export: ${status.result.exported} tracks to ${status.result.path}`);
+        if (status.error) setAnalyzeMsg(`Error: ${status.error}`);
+      }
+    }, 2000);
   };
 
   const importFiles = async () => {
@@ -236,14 +257,29 @@ export default function Downloads() {
         </button>
 
         {analyzedCount > 0 && (
-          <button onClick={exportRekordbox}
-            className="px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-1.5 border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-glow)] transition-colors">
-            <Upload size={11} /> EXPORT REKORDBOX
-          </button>
+          <>
+            <button onClick={exportRekordbox}
+              className="px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-1.5 border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-glow)] transition-colors">
+              <Upload size={11} /> REKORDBOX XML
+            </button>
+            <button onClick={exportUSB}
+              className="px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-1.5 border border-orange-500/40 text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 transition-colors">
+              <Upload size={11} /> CDJ USB
+            </button>
+          </>
         )}
 
         <div className="flex-1" />
         {analyzeMsg && <span className="text-[10px] font-mono text-[var(--color-glow)]">{analyzeMsg}</span>}
+        {tastemakerMsg && (
+          <span className="text-[10px] font-mono text-purple-400 flex items-center gap-2">
+            {findingTastemakers && <Loader2 size={10} className="animate-spin" />}
+            {tastemakerMsg}
+            {!findingTastemakers && tastemakerMsg.includes('Found') && (
+              <button onClick={() => navigate('/accounts')} className="underline hover:text-purple-300">VIEW →</button>
+            )}
+          </span>
+        )}
         {tastemakerMsg && (
           <span className="text-[10px] font-mono text-purple-400 flex items-center gap-2">
             {findingTastemakers && <Loader2 size={10} className="animate-spin" />}

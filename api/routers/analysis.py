@@ -141,6 +141,46 @@ def export_rekordbox(req: ExportRequest, db=Depends(get_db)):
         return svc.export_to_rekordbox_xml(req.track_ids)
 
 
+class USBExportRequest(BaseModel):
+    target_path: str
+    track_ids: Optional[List[int]] = None
+    playlist_name: Optional[str] = None
+
+
+def _run_usb_export(task, db_path, target_path, track_ids, playlist_name):
+    from core.database import Database
+    from core.usb_export import USBExporter
+    task.status = "running"
+    try:
+        thread_db = Database(db_path)
+        exporter = USBExporter(thread_db, target_path)
+        result = exporter.export(
+            track_ids=track_ids,
+            playlist_name=playlist_name,
+            on_progress=lambda msg: setattr(task, 'message', msg),
+        )
+        task.result = result
+        task.message = f"Exported {result.get('exported', 0)} tracks to {target_path}"
+        task.status = "completed"
+        thread_db.close()
+    except Exception as e:
+        task.error = str(e)
+        task.status = "failed"
+
+
+@router.post("/export-usb")
+def export_usb(req: USBExportRequest, db=Depends(get_db)):
+    """Export tracks to CDJ-ready USB drive (Pioneer .pdb format)."""
+    task = create_task()
+    t = threading.Thread(
+        target=_run_usb_export,
+        args=(task, db.db_path, req.target_path, req.track_ids, req.playlist_name),
+        daemon=True
+    )
+    t.start()
+    return {"task_id": task.id}
+
+
 # --- Cue Points ---
 
 class CuePoint(BaseModel):

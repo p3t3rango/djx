@@ -57,6 +57,13 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // USB Export
+  exportUSB: (target_path: string, track_ids?: number[], playlist_name?: string) =>
+    request<{ task_id: string }>('/analysis/export-usb', {
+      method: 'POST',
+      body: JSON.stringify({ target_path, track_ids, playlist_name }),
+    }),
+
   // Playlists
   getPlaylists: () => request<any[]>('/downloads/playlists'),
   createPlaylist: (name: string, track_ids: number[], export_folder?: string) =>
