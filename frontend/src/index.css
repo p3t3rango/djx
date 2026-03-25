@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@theme {
+  --color-glow: #00ffc8;
+  --color-glow-dim: rgba(0, 255, 200, 0.15);
+  --color-glow-bright: rgba(0, 255, 200, 0.4);
+  --color-surface: #0a0a0a;
+  --color-surface-2: #111111;
+  --color-surface-3: #1a1a1a;
+  --color-border: #222222;
+  --color-border-glow: rgba(0, 255, 200, 0.2);
+  --color-text: #e0e0e0;
+  --color-text-dim: #666666;
+}
+
+html {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+
+/* Glow effects */
+.glow-text {
+  color: var(--color-glow);
+  text-shadow: 0 0 10px rgba(0, 255, 200, 0.5);
+}
+
+.glow-border {
+  border-color: var(--color-border-glow);
+  box-shadow: 0 0 15px rgba(0, 255, 200, 0.05), inset 0 0 15px rgba(0, 255, 200, 0.02);
+}
+
+.glow-border-strong {
+  border-color: rgba(0, 255, 200, 0.4);
+  box-shadow: 0 0 20px rgba(0, 255, 200, 0.1), inset 0 0 20px rgba(0, 255, 200, 0.03);
+}
+
+.glow-btn {
+  background: rgba(0, 255, 200, 0.1);
+  border: 1px solid rgba(0, 255, 200, 0.3);
+  color: var(--color-glow);
+  transition: all 0.2s;
+}
+.glow-btn:hover {
+  background: rgba(0, 255, 200, 0.2);
+  box-shadow: 0 0 20px rgba(0, 255, 200, 0.15);
+}
+.glow-btn:disabled {
+  opacity: 0.4;
+}
+
+/* Scanline effect on sidebar */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+}
+
+/* Score colors */
+.score-viral { color: #00ff88; text-shadow: 0 0 8px rgba(0, 255, 136, 0.5); }
+.score-hot { color: #00ffc8; text-shadow: 0 0 6px rgba(0, 255, 200, 0.4); }
+.score-rising { color: #888; }
+.score-steady { color: #555; }

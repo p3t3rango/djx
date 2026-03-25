@@ -1,0 +1,307 @@
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Loader2, Download, Play, Pause, ExternalLink, TrendingUp, Flame, Sparkles, Link2 } from 'lucide-react';
+import { api } from '../api/client';
+import { usePlayer, type PlayerTrack } from '../components/PlayerContext';
+
+type SortMode = 'trending' | 'popular' | 'fresh' | 'related';
+
+const SORT_TABS: { mode: SortMode; label: string; icon: any; desc: string }[] = [
+  { mode: 'trending', label: 'TRENDING', icon: TrendingUp, desc: 'Rising fast right now' },
+  { mode: 'popular', label: 'POPULAR', icon: Flame, desc: 'Top played of all time' },
+  { mode: 'fresh', label: 'FRESH', icon: Sparkles, desc: 'Newest uploads first' },
+  { mode: 'related', label: 'RELATED', icon: Link2, desc: 'Find similar tracks' },
+];
+
+export default function GenreBrowser() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [genres, setGenres] = useState<Record<string, any>>({});
+  const [selectedGenre, setSelectedGenre] = useState(searchParams.get('genre') || '');
+  const [sortMode, setSortMode] = useState<SortMode>('trending');
+  const [tracks, setTracks] = useState<any[]>([]);
+  const [remixTracks, setRemixTracks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [downloadMsg, setDownloadMsg] = useState('');
+  const [count, setCount] = useState(50);
+  const [includeRemixes, setIncludeRemixes] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [relatedInput, setRelatedInput] = useState('');
+  const player = usePlayer();
+
+  useEffect(() => { api.getGenres().then(setGenres); }, []);
+
+  const discover = async (genre: string, sort: SortMode = sortMode) => {
+    if (sort === 'related') return; // handled separately
+    setSelectedGenre(genre);
+    setSearchParams({ genre });
+    setLoading(true);
+    setTracks([]);
+    setRemixTracks([]);
+    setSelected(new Set());
+    setMessage('Connecting to SoundCloud...');
+
+    const { task_id } = await api.discover(genre, count, includeRemixes, sort);
+    pollTask(task_id);
+  };
+
+  const discoverRelated = async () => {
+    // Try to extract track ID from URL or use as ID
+    let trackId: number;
+    const input = relatedInput.trim();
+    if (!input) return;
+
+    if (input.match(/^\d+$/)) {
+      trackId = parseInt(input);
+    } else {
+      // Could be a SoundCloud URL — try to resolve
+      setMessage('This feature works with track IDs. Find the ID from your library or SoundCloud.');
+      return;
+    }
+
+    setLoading(true);
+    setTracks([]);
+    setRemixTracks([]);
+    setSelected(new Set());
+    setMessage('Finding related tracks...');
+
+    const { task_id } = await api.discoverRelated(trackId, count);
+    pollTask(task_id);
+  };
+
+  const pollTask = (task_id: string) => {
+    const poll = setInterval(async () => {
+      const status = await api.getDiscoveryStatus(task_id);
+      setMessage(status.message || status.status);
+      if (status.status === 'completed') {
+        clearInterval(poll);
+        const found = status.result?.tracks || [];
+        const remixes = status.result?.remix_tracks || [];
+        setTracks(found);
+        setRemixTracks(remixes);
+        setSelected(new Set([...found, ...remixes].map((t: any) => t.track_id)));
+        setLoading(false);
+        setMessage(`${found.length} tracks${remixes.length ? ` + ${remixes.length} remixes` : ''} discovered`);
+      } else if (status.status === 'failed') {
+        clearInterval(poll);
+        setLoading(false);
+        setMessage(`Error: ${status.error}`);
+      }
+    }, 2000);
+  };
+
+  const toggleSelect = (id: number) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelected(next);
+  };
+
+  const allTracks = [...tracks, ...remixTracks];
+  const selectAll = () => setSelected(new Set(allTracks.map(t => t.track_id)));
+  const selectNone = () => setSelected(new Set());
+
+  const downloadSelected = async () => {
+    if (!selected.size) return;
+    setDownloading(true);
+    setDownloadMsg('Queuing...');
+    const folder = selectedGenre ? (genres[selectedGenre]?.folder || selectedGenre) : 'related';
+    const { task_id } = await api.downloadTracks(Array.from(selected), folder);
+    const poll = setInterval(async () => {
+      const status = await api.getDownloadStatus(task_id);
+      setDownloadMsg(status.message || status.status);
+      if (status.status === 'completed' || status.status === 'failed') {
+        clearInterval(poll);
+        setDownloading(false);
+        const r = status.result;
+        if (r) setDownloadMsg(`${r.downloaded} downloaded, ${r.skipped} skipped, ${r.failed} failed`);
+        else if (status.error) setDownloadMsg(`Error: ${status.error}`);
+      }
+    }, 2000);
+  };
+
+  const formatPlays = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n);
+  const scoreColor = (s: number) => s >= 1000 ? 'score-viral' : s >= 200 ? 'score-hot' : s >= 50 ? 'score-rising' : 'score-steady';
+  const scoreLabel = (s: number) => s >= 1000 ? 'VIRAL' : s >= 200 ? 'HOT' : s >= 50 ? 'RISING' : '';
+
+  const renderTable = (trackList: any[], title?: string) => (
+    <div className={title ? 'mt-6' : ''}>
+      {title && <h3 className="text-xs font-mono text-[var(--color-glow)] tracking-widest mb-3">{title}</h3>}
+      <div className="bg-[var(--color-surface-2)] rounded border border-[var(--color-border)] overflow-hidden">
+        <table className="w-full text-[11px] font-mono">
+          <thead>
+            <tr className="border-b border-[var(--color-border)] text-[var(--color-text-dim)]">
+              <th className="w-8 px-2 py-2.5">
+                <input type="checkbox"
+                  checked={trackList.every(t => selected.has(t.track_id)) && trackList.length > 0}
+                  onChange={() => {
+                    const allSelected = trackList.every(t => selected.has(t.track_id));
+                    const next = new Set(selected);
+                    trackList.forEach(t => allSelected ? next.delete(t.track_id) : next.add(t.track_id));
+                    setSelected(next);
+                  }} />
+              </th>
+              <th className="w-8"></th>
+              <th className="text-left px-2 py-2.5 tracking-wider">TITLE</th>
+              <th className="text-left px-2 py-2.5 tracking-wider">ARTIST</th>
+              <th className="text-right px-2 py-2.5 tracking-wider">PLAYS</th>
+              <th className="text-right px-3 py-2.5 tracking-wider">SCORE</th>
+              <th className="w-8"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {trackList.map((t: any, idx: number) => {
+              const score = Math.round(t.trending_score);
+              const isActive = player.playingTrack?.track_id === t.track_id || player.embedTrack?.track_id === t.track_id;
+              const isThisPlaying = player.playingTrack?.track_id === t.track_id && player.isPlaying;
+              const isThisLoading = player.playingTrack?.track_id === t.track_id && player.isLoading;
+              return (
+                <tr key={t.track_id}
+                  className={`border-b border-[var(--color-border)]/30 transition-all duration-150 ${isActive ? 'bg-[var(--color-glow-dim)]' : 'hover:bg-[var(--color-surface-3)]'}`}>
+                  <td className="px-2 py-2 text-center">
+                    <input type="checkbox" checked={selected.has(t.track_id)} onChange={() => toggleSelect(t.track_id)} />
+                  </td>
+                  <td className="px-1 py-2">
+                    <button onClick={() => player.playFromQueue(trackList as PlayerTrack[], idx)}
+                      className={`p-1 rounded-full transition-all ${isActive ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-glow)]'}`}>
+                      {isThisLoading ? <Loader2 size={13} className="animate-spin" /> :
+                       isThisPlaying ? <Pause size={13} /> : <Play size={13} />}
+                    </button>
+                  </td>
+                  <td className="px-2 py-2 max-w-[280px] truncate text-[var(--color-text)]">{t.title}</td>
+                  <td className="px-2 py-2 max-w-[160px] truncate text-[var(--color-text-dim)]">{t.artist}</td>
+                  <td className="px-2 py-2 text-right text-[var(--color-text-dim)]">{formatPlays(t.playback_count)}</td>
+                  <td className="px-3 py-2 text-right">
+                    <span className={scoreColor(score)}>{score}</span>
+                    {scoreLabel(score) && <span className={`ml-1.5 text-[9px] ${scoreColor(score)} opacity-60`}>{scoreLabel(score)}</span>}
+                  </td>
+                  <td className="px-1 py-2">
+                    <a href={t.permalink_url} target="_blank" rel="noopener noreferrer"
+                      className="p-1 rounded text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors inline-block">
+                      <ExternalLink size={12} />
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <h2 className="text-xl font-mono font-bold tracking-wider mb-6 glow-text">DISCOVER</h2>
+
+      {/* Sort mode tabs */}
+      <div className="flex gap-1 mb-5 border-b border-[var(--color-border)] pb-3">
+        {SORT_TABS.map(({ mode, label, icon: Icon, desc }) => (
+          <button key={mode} onClick={() => { setSortMode(mode); if (mode !== 'related' && selectedGenre) discover(selectedGenre, mode); }}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded text-[11px] font-mono tracking-wide transition-all ${
+              sortMode === mode
+                ? 'bg-[var(--color-glow-dim)] text-[var(--color-glow)] glow-border-strong border'
+                : 'text-[var(--color-text-dim)] hover:text-[var(--color-text)] border border-transparent'
+            }`}
+            title={desc}>
+            <Icon size={13} />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Related mode: input */}
+      {sortMode === 'related' && (
+        <div className="flex gap-2 mb-5">
+          <input value={relatedInput} onChange={e => setRelatedInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && discoverRelated()}
+            placeholder="Enter a SoundCloud track ID..."
+            className="flex-1 bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded px-3 py-2 text-xs font-mono text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-border-glow)]" />
+          <button onClick={discoverRelated} disabled={loading || !relatedInput.trim()}
+            className="glow-btn px-4 py-2 rounded text-[11px] font-mono disabled:opacity-40">
+            FIND RELATED
+          </button>
+        </div>
+      )}
+
+      {/* Genre pills (not for related mode) */}
+      {sortMode !== 'related' && (
+        <div className="flex gap-2 mb-5 flex-wrap">
+          {Object.entries(genres).map(([key, val]: [string, any]) => (
+            <button key={key} onClick={() => discover(key)} disabled={loading}
+              className={`px-3 py-1.5 rounded text-[11px] font-mono tracking-wide transition-all duration-200 border ${
+                selectedGenre === key
+                  ? 'glow-border-strong bg-[var(--color-glow-dim)] text-[var(--color-glow)]'
+                  : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-glow)]'
+              }`}>
+              {val.display_name.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Controls */}
+      {sortMode !== 'related' && (
+        <div className="flex items-center gap-5 mb-5 text-[11px] font-mono text-[var(--color-text-dim)]">
+          <label className="flex items-center gap-2">
+            LIMIT
+            <input type="number" value={count} onChange={e => setCount(Number(e.target.value))}
+              className="w-14 bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded px-2 py-1 text-[var(--color-text)] font-mono text-[11px]" />
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={includeRemixes} onChange={e => setIncludeRemixes(e.target.checked)} />
+            REMIXES
+          </label>
+          <div className="flex-1" />
+          <div className="flex items-center gap-3 text-[10px]">
+            <span>SCORE:</span>
+            <span className="score-viral">1K+ VIRAL</span>
+            <span className="score-hot">200+ HOT</span>
+            <span className="score-rising">50+ RISING</span>
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex items-center gap-2 text-[var(--color-glow)] mb-5 font-mono text-xs">
+          <Loader2 size={14} className="animate-spin" /> {message}
+        </div>
+      )}
+
+      {(tracks.length > 0 || remixTracks.length > 0) && (
+        <>
+          {/* Toolbar */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-4 text-[11px] font-mono">
+              <span className="text-[var(--color-text-dim)]">{allTracks.length} TRACKS</span>
+              <span className="text-[var(--color-glow)]">{selected.size} SELECTED</span>
+              <button onClick={selectAll} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">ALL</button>
+              <button onClick={selectNone} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">NONE</button>
+            </div>
+            <button onClick={downloadSelected} disabled={downloading || !selected.size}
+              className="glow-btn px-4 py-2 rounded text-[11px] font-mono flex items-center gap-2">
+              {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+              {downloading ? downloadMsg : `DOWNLOAD ${selected.size}`}
+            </button>
+          </div>
+
+          {!loading && message && <p className="text-[10px] font-mono text-[var(--color-text-dim)] mb-2">{message}</p>}
+
+          {tracks.length > 0 && renderTable(tracks)}
+          {remixTracks.length > 0 && renderTable(remixTracks, 'REMIXES')}
+        </>
+      )}
+
+      {!loading && !tracks.length && !message && sortMode !== 'related' && (
+        <div className="text-center py-16">
+          <p className="text-sm font-mono text-[var(--color-text-dim)] mb-2">SELECT A GENRE TO START DISCOVERING</p>
+          <p className="text-[11px] font-mono text-[var(--color-text-dim)] opacity-50">
+            {sortMode === 'trending' && 'Rising tracks — play velocity × engagement × recency'}
+            {sortMode === 'popular' && 'Most played tracks of all time in this genre'}
+            {sortMode === 'fresh' && 'Newest uploads — underground finds before anyone else'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
