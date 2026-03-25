@@ -529,11 +529,26 @@ export default function TrackDetail({ track, onClose, onAnalyzed }: {
           <span className="text-[10px] font-mono text-[var(--color-text)] w-14 text-center">{gridOffset.toFixed(3)}s</span>
           <button onClick={() => setGridOffset(o => o + 0.01)}
             className="px-1.5 py-0.5 text-[10px] font-mono border border-[var(--color-border)] rounded text-[var(--color-text-dim)] hover:text-[var(--color-glow)]">▶</button>
+          <button onClick={() => { setBpm(b => b ? b / 2 : b); setBeats(prev => prev.filter((_, i) => i % 2 === 0)); }}
+            className="px-1.5 py-0.5 text-[9px] font-mono border border-[var(--color-border)] rounded text-[var(--color-text-dim)] hover:text-[var(--color-glow)]" title="Half BPM">½×</button>
+          <button onClick={() => {
+            setBpm(b => b ? b * 2 : b);
+            setBeats(prev => {
+              const doubled: number[] = [];
+              for (let i = 0; i < prev.length - 1; i++) {
+                doubled.push(prev[i]);
+                doubled.push((prev[i] + prev[i + 1]) / 2);
+              }
+              doubled.push(prev[prev.length - 1]);
+              return doubled;
+            });
+          }}
+            className="px-1.5 py-0.5 text-[9px] font-mono border border-[var(--color-border)] rounded text-[var(--color-text-dim)] hover:text-[var(--color-glow)]" title="Double BPM">2×</button>
+          {(gridOffset !== 0 || true) && (
+            <button onClick={saveGrid} className="glow-btn px-2 py-0.5 rounded text-[9px] font-mono">SAVE</button>
+          )}
           {gridOffset !== 0 && (
-            <>
-              <button onClick={() => setGridOffset(0)} className="p-1 text-[var(--color-text-dim)] hover:text-[var(--color-glow)]"><SkipBack size={11} /></button>
-              <button onClick={saveGrid} className="glow-btn px-2 py-0.5 rounded text-[9px] font-mono">SAVE</button>
-            </>
+            <button onClick={() => setGridOffset(0)} className="p-1 text-[var(--color-text-dim)] hover:text-[var(--color-glow)]"><SkipBack size={11} /></button>
           )}
         </div>
 

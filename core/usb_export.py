@@ -15,7 +15,7 @@ from typing import List, Optional, Callable
 
 from core.database import Database
 from core.pdb_writer import PdbWriter
-from core.anlz_writer import write_anlz_dat
+from core.anlz_writer import write_anlz_dat, write_anlz_ext
 from core.utils import sanitize_filename
 
 logger = logging.getLogger(__name__)
@@ -167,8 +167,23 @@ class USBExporter:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-            # Write ANLZ file
-            write_anlz_dat(anlz_path, usb_path, bpm, beats, cues)
+            # Generate waveform data for ANLZ files
+            waveform_data = None
+            try:
+                from core.waveform_service import generate_waveform
+                waveform_data = generate_waveform(dest_path, num_points=800)
+                if 'error' in waveform_data:
+                    waveform_data = None
+            except Exception:
+                pass
+
+            # Write .DAT file (beat grid, cues, mono waveform preview)
+            write_anlz_dat(anlz_path, usb_path, bpm, beats, cues, waveform_data)
+
+            # Write .EXT file (color waveform detail)
+            if waveform_data:
+                ext_path = os.path.join(anlz_subdir, f"ANLZ{anlz_num}.EXT")
+                write_anlz_ext(ext_path, waveform_data, duration)
 
             # Add track to PDB
             pdb.add_track(

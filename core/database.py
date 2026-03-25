@@ -97,7 +97,61 @@ class Database:
                 self.conn.execute(sql)
             except Exception:
                 pass  # Column already exists
+
+        # Create tags tables
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                color TEXT DEFAULT '#00ffc8',
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS track_tags (
+                track_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (track_id, tag_id)
+            );
+        """)
         self.conn.commit()
+
+    # --- Tags ---
+
+    def get_tags(self) -> List[dict]:
+        rows = self.conn.execute("""
+            SELECT t.*, COUNT(tt.track_id) as track_count
+            FROM tags t LEFT JOIN track_tags tt ON t.id = tt.tag_id
+            GROUP BY t.id ORDER BY t.name
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+    def create_tag(self, name: str, color: str = '#00ffc8') -> int:
+        self.conn.execute("INSERT OR IGNORE INTO tags (name, color) VALUES (?, ?)", (name, color))
+        self.conn.commit()
+        row = self.conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
+        return row["id"] if row else 0
+
+    def delete_tag(self, tag_id: int):
+        self.conn.execute("DELETE FROM track_tags WHERE tag_id = ?", (tag_id,))
+        self.conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+        self.conn.commit()
+
+    def tag_track(self, track_id: int, tag_id: int):
+        self.conn.execute("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?, ?)", (track_id, tag_id))
+        self.conn.commit()
+
+    def untag_track(self, track_id: int, tag_id: int):
+        self.conn.execute("DELETE FROM track_tags WHERE track_id = ? AND tag_id = ?", (track_id, tag_id))
+        self.conn.commit()
+
+    def get_track_tags(self, track_id: int) -> List[dict]:
+        rows = self.conn.execute("""
+            SELECT t.* FROM tags t JOIN track_tags tt ON t.id = tt.tag_id WHERE tt.track_id = ?
+        """, (track_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_tracks_by_tag(self, tag_id: int) -> List[int]:
+        rows = self.conn.execute("SELECT track_id FROM track_tags WHERE tag_id = ?", (tag_id,)).fetchall()
+        return [r["track_id"] for r in rows]
 
     # --- Tracks ---
 

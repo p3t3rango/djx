@@ -64,6 +64,18 @@ export const api = {
       body: JSON.stringify({ target_path, track_ids, playlist_name }),
     }),
 
+  // Tags
+  getTags: () => request<any[]>('/downloads/tags'),
+  createTag: (name: string, color = '#00ffc8') =>
+    request<any>('/downloads/tags', { method: 'POST', body: JSON.stringify({ name, color }) }),
+  deleteTag: (tagId: number) =>
+    request<any>(`/downloads/tags/${tagId}`, { method: 'DELETE' }),
+  tagTrack: (track_id: number, tag_id: number) =>
+    request<any>('/downloads/tags/assign', { method: 'POST', body: JSON.stringify({ track_id, tag_id }) }),
+  untagTrack: (track_id: number, tag_id: number) =>
+    request<any>('/downloads/tags/remove', { method: 'POST', body: JSON.stringify({ track_id, tag_id }) }),
+  getTrackTags: (trackId: number) => request<any[]>(`/downloads/tags/track/${trackId}`),
+
   // Playlists
   getPlaylists: () => request<any[]>('/downloads/playlists'),
   createPlaylist: (name: string, track_ids: number[], export_folder?: string) =>

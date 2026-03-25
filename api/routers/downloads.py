@@ -490,3 +490,49 @@ def delete_download(download_id: int, db=Depends(get_db)):
     if file_path and os.path.exists(file_path):
         os.remove(file_path)
     return {"deleted": True}
+
+
+# --- Tags ---
+
+class CreateTagRequest(BaseModel):
+    name: str
+    color: str = '#00ffc8'
+
+
+class TagTrackRequest(BaseModel):
+    track_id: int
+    tag_id: int
+
+
+@router.get("/tags")
+def list_tags(db=Depends(get_db)):
+    return db.get_tags()
+
+
+@router.post("/tags")
+def create_tag(req: CreateTagRequest, db=Depends(get_db)):
+    tag_id = db.create_tag(req.name, req.color)
+    return {"id": tag_id, "name": req.name}
+
+
+@router.delete("/tags/{tag_id}")
+def delete_tag(tag_id: int, db=Depends(get_db)):
+    db.delete_tag(tag_id)
+    return {"deleted": True}
+
+
+@router.post("/tags/assign")
+def tag_track(req: TagTrackRequest, db=Depends(get_db)):
+    db.tag_track(req.track_id, req.tag_id)
+    return {"tagged": True}
+
+
+@router.post("/tags/remove")
+def untag_track(req: TagTrackRequest, db=Depends(get_db)):
+    db.untag_track(req.track_id, req.tag_id)
+    return {"untagged": True}
+
+
+@router.get("/tags/track/{track_id}")
+def get_track_tags(track_id: int, db=Depends(get_db)):
+    return db.get_track_tags(track_id)
