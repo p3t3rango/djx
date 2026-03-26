@@ -14,16 +14,8 @@ from core.utils import sanitize_filename, ensure_directory
 
 
 def _find_executable(name: str) -> Optional[str]:
-    path = shutil.which(name)
-    if path:
-        return path
-    for candidate in [
-        os.path.expanduser(f"~/Library/Python/3.9/bin/{name}"),
-        os.path.expanduser(f"~/.local/bin/{name}"),
-    ]:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+    """Find an executable using system PATH only (no user-writable directory fallbacks)."""
+    return shutil.which(name)
 
 
 class DownloadService:

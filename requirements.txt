@@ -1,8 +1,8 @@
-soundcloud-v2>=1.5.0
-yt-dlp>=2024.0.0
-rich>=13.0.0
-click>=8.0.0
-requests>=2.28.0
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
+soundcloud-v2>=1.5.0,<2.0.0
+yt-dlp>=2024.0.0,<2026.0.0
+rich>=13.0.0,<15.0.0
+click>=8.0.0,<9.0.0
+requests>=2.28.0,<3.0.0
+fastapi>=0.104.0,<1.0.0
+uvicorn[standard]>=0.24.0,<1.0.0
+pydantic>=2.0.0,<3.0.0

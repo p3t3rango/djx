@@ -273,9 +273,15 @@ def import_folder(req: ImportFolderRequest, db=Depends(get_db)):
     import shutil
     from core.utils import ensure_directory
 
-    folder = os.path.expanduser(req.folder_path)
+    folder = os.path.abspath(os.path.expanduser(req.folder_path))
+    # Block path traversal and system directories
+    if ".." in req.folder_path:
+        return {"error": "Invalid folder path"}
+    blocked_prefixes = ("/etc", "/System", "/usr", "/bin", "/sbin", "/var", "/private/etc")
+    if any(folder.startswith(p) for p in blocked_prefixes):
+        return {"error": "Access to system directories is not allowed"}
     if not os.path.isdir(folder):
-        return {"error": f"Folder not found: {folder}"}
+        return {"error": "Folder not found"}
 
     # Check for djx_library.json manifest — full metadata restore
     manifest_path = os.path.join(folder, "djx_library.json")
@@ -434,12 +440,15 @@ class BeatGridRequest(BaseModel):
 def set_beatgrid(req: BeatGridRequest, db=Depends(get_db)):
     """Save corrected beat grid."""
     import json
-    updates = {"beats_json": json.dumps(req.beats)}
+    db.conn.execute(
+        "UPDATE tracks SET beats_json = ? WHERE track_id = ?",
+        (json.dumps(req.beats), req.track_id)
+    )
     if req.bpm:
-        updates["bpm"] = req.bpm
-
-    for key, val in updates.items():
-        db.conn.execute(f"UPDATE tracks SET {key} = ? WHERE track_id = ?", (val, req.track_id))
+        db.conn.execute(
+            "UPDATE tracks SET bpm = ? WHERE track_id = ?",
+            (req.bpm, req.track_id)
+        )
     db.conn.commit()
     return {"saved": True, "beats": len(req.beats)}
 

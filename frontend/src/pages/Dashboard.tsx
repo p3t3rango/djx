@@ -24,8 +24,19 @@ export default function Dashboard() {
     api.getDownloads(undefined, 10).then(setRecentDownloads);
   }, []);
 
+  const isSoundCloudUrl = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      return ['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com', 'on.soundcloud.com'].includes(parsed.hostname);
+    } catch { return false; }
+  };
+
   const resolveUrl = async () => {
     if (!scUrl.trim()) return;
+    if (!isSoundCloudUrl(scUrl.trim())) {
+      setDownloadMsg('Please enter a valid SoundCloud URL');
+      return;
+    }
     setResolving(true);
     setResolved(null);
     setDownloadMsg('');

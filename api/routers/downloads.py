@@ -37,6 +37,19 @@ class BatchDownloadRequest(BaseModel):
     include_remixes: bool = False
 
 
+def _validate_soundcloud_url(url: str) -> bool:
+    """Validate that a URL is a SoundCloud URL."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in ("http", "https") and parsed.netloc in (
+            "soundcloud.com", "www.soundcloud.com", "m.soundcloud.com",
+            "on.soundcloud.com",
+        )
+    except Exception:
+        return False
+
+
 class UrlDownloadRequest(BaseModel):
     url: str
     genre_folder: str = "downloads"
@@ -150,6 +163,8 @@ def batch_download(req: BatchDownloadRequest, db=Depends(get_db), sc=Depends(get
 @router.post("/resolve-url")
 def resolve_url(req: UrlDownloadRequest, sc=Depends(get_sc)):
     """Resolve a SoundCloud URL to track info without downloading."""
+    if not _validate_soundcloud_url(req.url):
+        return {"error": "Only SoundCloud URLs are accepted"}
     from core.models import Track
     from core.trending import compute_trending_score
     try:
@@ -191,8 +206,8 @@ def resolve_url(req: UrlDownloadRequest, sc=Depends(get_sc)):
             "permalink_url": t.permalink_url,
             "trending_score": t.trending_score,
         }
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Failed to resolve URL"}
 
 
 def _run_url_download(task, sc, db_path, url, genre_folder, analyze_after):
@@ -264,6 +279,8 @@ def _run_url_download(task, sc, db_path, url, genre_folder, analyze_after):
 @router.post("/url")
 def download_from_url(req: UrlDownloadRequest, db=Depends(get_db), sc=Depends(get_sc)):
     """Download a track from a SoundCloud URL."""
+    if not _validate_soundcloud_url(req.url):
+        return {"error": "Only SoundCloud URLs are accepted"}
     task = create_task()
     t = threading.Thread(
         target=_run_url_download,
@@ -346,11 +363,21 @@ def download_stats(db=Depends(get_db)):
     return db.get_download_stats()
 
 
+def _validate_file_path(file_path: str, db) -> bool:
+    """Validate file path is within the download directory."""
+    download_dir = db.get_setting("download_dir") or "downloads"
+    abs_download = os.path.abspath(download_dir)
+    abs_file = os.path.abspath(file_path)
+    return abs_file.startswith(abs_download + os.sep) or abs_file == abs_download
+
+
 @router.get("/file/{download_id}")
 def serve_file(download_id: int, db=Depends(get_db)):
     row = db.conn.execute("SELECT file_path FROM downloads WHERE id = ?", (download_id,)).fetchone()
     if not row or not row["file_path"] or not os.path.exists(row["file_path"]):
         return {"error": "File not found"}
+    if not _validate_file_path(row["file_path"], db):
+        return {"error": "Invalid file path"}
     return FileResponse(row["file_path"], media_type="audio/mpeg")
 
 
@@ -363,6 +390,8 @@ def play_library_file(track_id: int, db=Depends(get_db)):
     ).fetchone()
     if not row or not os.path.exists(row["file_path"]):
         return {"error": "File not found"}
+    if not _validate_file_path(row["file_path"], db):
+        return {"error": "Invalid file path"}
     return FileResponse(row["file_path"], media_type="audio/mpeg")
 
 
@@ -371,27 +400,27 @@ class EditMetadataRequest(BaseModel):
     artist: Optional[str] = None
     genre: Optional[str] = None
 
+    class Config:
+        str_max_length = 500
+
 
 @router.put("/metadata/{track_id}")
 def edit_metadata(track_id: int, req: EditMetadataRequest, db=Depends(get_db)):
     """Edit track metadata in DB and ID3 tags."""
-    updates = []
-    params = []
-    if req.title is not None:
-        updates.append("title = ?")
-        params.append(req.title)
-    if req.artist is not None:
-        updates.append("artist = ?")
-        params.append(req.artist)
-    if req.genre is not None:
-        updates.append("genre = ?")
-        params.append(req.genre)
+    # Use explicit per-field updates to prevent SQL injection
+    ALLOWED_FIELDS = {"title": req.title, "artist": req.artist, "genre": req.genre}
+    updated = False
+    for field, value in ALLOWED_FIELDS.items():
+        if value is not None:
+            db.conn.execute(
+                f"UPDATE tracks SET {field} = ? WHERE track_id = ?",
+                (value, track_id)
+            )
+            updated = True
 
-    if not updates:
+    if not updated:
         return {"error": "No fields to update"}
 
-    params.append(track_id)
-    db.conn.execute(f"UPDATE tracks SET {', '.join(updates)} WHERE track_id = ?", params)
     db.conn.commit()
 
     # Also update ID3 tags on the file
@@ -450,7 +479,10 @@ def create_playlist(req: CreatePlaylistRequest, db=Depends(get_db)):
     # Export to folder if requested
     copied = 0
     if req.export_folder:
-        folder = os.path.expanduser(req.export_folder)
+        folder = os.path.abspath(os.path.expanduser(req.export_folder))
+        # Block path traversal — reject paths with .. or system directories
+        if ".." in req.export_folder:
+            return {"error": "Invalid export folder path"}
         ensure_directory(folder)
         for tid in req.track_ids:
             row = db.conn.execute(

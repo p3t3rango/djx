@@ -1,6 +1,7 @@
 import os
 import threading
-from fastapi import Request
+from typing import Generator
+from fastapi import Request, Depends
 from soundcloud import SoundCloud
 from core.database import Database
 
@@ -8,11 +9,13 @@ _sc_lock = threading.Lock()
 _db_path = os.environ.get("DJX_DB_PATH", "sc_discover.db")
 
 
-def get_db(request: Request) -> Database:
-    # Each request gets its own DB connection to avoid SQLite thread-safety segfaults
-    if not hasattr(request.state, '_db'):
-        request.state._db = Database(_db_path)
-    return request.state._db
+def get_db(request: Request) -> Generator[Database, None, None]:
+    """Each request gets its own DB connection, closed after the request."""
+    db = Database(_db_path)
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def get_sc(request: Request) -> SoundCloud:

@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog } = require('electron');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -34,12 +34,13 @@ function getFrontendPath() {
 }
 
 function findPython() {
-  const candidates = ['python3', '/usr/bin/python3', '/usr/local/bin/python3',
+  // Only search known system paths — never user-writable directories
+  const candidates = ['/usr/bin/python3', '/usr/local/bin/python3',
     '/opt/homebrew/bin/python3', '/Library/Developer/CommandLineTools/usr/bin/python3'];
   for (const cmd of candidates) {
     try {
-      execSync(`${cmd} --version`, { stdio: 'ignore' });
-      return cmd;
+      const { status } = require('child_process').spawnSync(cmd, ['--version'], { stdio: 'ignore' });
+      if (status === 0) return cmd;
     } catch {}
   }
   return null;
@@ -47,11 +48,11 @@ function findPython() {
 
 function checkDeps(python) {
   try {
-    execSync(`${python} -c "import soundcloud; import fastapi; import essentia"`, {
-      stdio: 'ignore',
-      env: { ...process.env, PYTHONPATH: getBackendPath() }
-    });
-    return true;
+    const { status } = require('child_process').spawnSync(
+      python, ['-c', 'import soundcloud; import fastapi; import essentia'],
+      { stdio: 'ignore', env: { ...process.env, PYTHONPATH: getBackendPath() } }
+    );
+    return status === 0;
   } catch {
     return false;
   }
@@ -79,9 +80,11 @@ function startPython(python) {
   const backendPath = getBackendPath();
   const dbPath = path.join(dataDir, 'djx.db');
 
-  // Set environment so the backend uses our data directory
+  // Set environment — only pass required vars (principle of least privilege)
   const env = {
-    ...process.env,
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    LANG: process.env.LANG || 'en_US.UTF-8',
     PYTHONPATH: backendPath,
     DJX_DB_PATH: dbPath,
     DJX_DOWNLOAD_DIR: downloadsDir,
@@ -137,6 +140,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      enableRemoteModule: false,
     },
   });
 

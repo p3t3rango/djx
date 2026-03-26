@@ -90,6 +90,7 @@ export default function PlayerBar() {
           </div>
         </div>
         <iframe width="100%" height="80" scrolling="no" frameBorder="no" allow="autoplay"
+          sandbox="allow-scripts allow-same-origin allow-popups"
           src={embedUrl(track.permalink_url)} className="block" />
       </div>
     );
