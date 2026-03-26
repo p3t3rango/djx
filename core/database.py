@@ -356,5 +356,135 @@ class Database:
                 pass
         return migrated
 
+    # --- Library Manifest (portable metadata) ---
+
+    def export_library_manifest(self, download_dir: str) -> str:
+        """Export all library metadata to djx_library.json in the download folder.
+        File paths are stored relative to download_dir for portability."""
+        manifest = {"version": 1, "tracks": [], "tags": [], "track_tags": [], "playlists": []}
+
+        # Tracks + downloads joined
+        rows = self.conn.execute("""
+            SELECT t.*, d.genre_folder, d.file_path, d.file_size_bytes, d.download_method, d.downloaded_at
+            FROM tracks t
+            JOIN downloads d ON t.track_id = d.track_id
+            WHERE d.status = 'completed'
+        """).fetchall()
+        for r in rows:
+            track = dict(r)
+            # Make file_path relative
+            fp = track.get("file_path")
+            if fp and os.path.isabs(fp):
+                try:
+                    track["file_path"] = os.path.relpath(fp, download_dir)
+                except ValueError:
+                    pass  # different drive on Windows
+            manifest["tracks"].append(track)
+
+        # Tags, track-tags, playlists — tables may not exist yet
+        for table, key in [("tags", "tags"), ("track_tags", "track_tags"), ("playlists", "playlists")]:
+            try:
+                for r in self.conn.execute(f"SELECT * FROM {table}").fetchall():
+                    manifest[key].append(dict(r))
+            except Exception:
+                pass
+
+        out_path = os.path.join(download_dir, "djx_library.json")
+        with open(out_path, "w") as f:
+            json.dump(manifest, f, indent=2, default=str)
+        return out_path
+
+    def import_library_manifest(self, manifest_path: str, download_dir: str) -> dict:
+        """Restore library from a djx_library.json manifest.
+        Resolves relative file paths against download_dir."""
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        imported_tracks = 0
+        skipped_tracks = 0
+
+        for t in manifest.get("tracks", []):
+            track_id = t.get("track_id")
+            if not track_id:
+                continue
+
+            # Resolve relative file path
+            fp = t.get("file_path")
+            if fp and not os.path.isabs(fp):
+                fp = os.path.join(download_dir, fp)
+            # Skip if file doesn't exist on disk
+            if not fp or not os.path.exists(fp):
+                skipped_tracks += 1
+                continue
+
+            # Upsert track — preserve existing data, fill in gaps
+            existing = self.conn.execute("SELECT 1 FROM tracks WHERE track_id = ?", (track_id,)).fetchone()
+            if existing:
+                # Update analysis fields if they're missing locally but present in manifest
+                self.conn.execute("""
+                    UPDATE tracks SET
+                        bpm = COALESCE(bpm, ?), musical_key = COALESCE(musical_key, ?),
+                        camelot_key = COALESCE(camelot_key, ?), bpm_confidence = COALESCE(bpm_confidence, ?),
+                        key_confidence = COALESCE(key_confidence, ?), analyzed_at = COALESCE(analyzed_at, ?),
+                        beats_json = COALESCE(beats_json, ?), cues_json = COALESCE(cues_json, ?),
+                        permalink_url = CASE WHEN permalink_url = '' THEN ? ELSE permalink_url END,
+                        artwork_url = COALESCE(artwork_url, ?)
+                    WHERE track_id = ?
+                """, (
+                    t.get("bpm"), t.get("musical_key"), t.get("camelot_key"),
+                    t.get("bpm_confidence"), t.get("key_confidence"), t.get("analyzed_at"),
+                    t.get("beats_json"), t.get("cues_json"),
+                    t.get("permalink_url", ""), t.get("artwork_url"),
+                    track_id,
+                ))
+                # Update file path in downloads
+                self.conn.execute(
+                    "UPDATE downloads SET file_path = ? WHERE track_id = ? AND (file_path IS NULL OR file_path = '')",
+                    (fp, track_id))
+            else:
+                self.conn.execute("""
+                    INSERT OR IGNORE INTO tracks
+                    (track_id, title, artist, permalink_url, genre, tags, playback_count,
+                     likes_count, repost_count, duration_seconds, artwork_url, discovery_source,
+                     bpm, musical_key, camelot_key, bpm_confidence, key_confidence, analyzed_at,
+                     beats_json, cues_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    track_id, t.get("title", ""), t.get("artist", ""),
+                    t.get("permalink_url", ""), t.get("genre", ""), t.get("tags", ""),
+                    t.get("playback_count", 0), t.get("likes_count", 0),
+                    t.get("repost_count", 0), t.get("duration_seconds", 0),
+                    t.get("artwork_url"), t.get("discovery_source"),
+                    t.get("bpm"), t.get("musical_key"), t.get("camelot_key"),
+                    t.get("bpm_confidence"), t.get("key_confidence"), t.get("analyzed_at"),
+                    t.get("beats_json"), t.get("cues_json"),
+                ))
+                self.conn.execute("""
+                    INSERT OR IGNORE INTO downloads (track_id, genre_folder, file_path, file_size_bytes, status, download_method)
+                    VALUES (?, ?, ?, ?, 'completed', ?)
+                """, (track_id, t.get("genre_folder", "imported"), fp,
+                      t.get("file_size_bytes"), t.get("download_method", "imported")))
+            imported_tracks += 1
+
+        # Restore tags
+        imported_tags = 0
+        for tag in manifest.get("tags", []):
+            self.conn.execute("INSERT OR IGNORE INTO tags (id, name, color) VALUES (?, ?, ?)",
+                              (tag["id"], tag["name"], tag.get("color", "#00ffc8")))
+            imported_tags += 1
+
+        # Restore track-tag assignments
+        for tt in manifest.get("track_tags", []):
+            self.conn.execute("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?, ?)",
+                              (tt["track_id"], tt["tag_id"]))
+
+        # Restore playlists
+        for pl in manifest.get("playlists", []):
+            self.conn.execute("INSERT OR IGNORE INTO playlists (id, name, track_ids_json) VALUES (?, ?, ?)",
+                              (pl["id"], pl["name"], pl.get("track_ids_json", "[]")))
+
+        self.conn.commit()
+        return {"imported_tracks": imported_tracks, "skipped_tracks": skipped_tracks, "imported_tags": imported_tags}
+
     def close(self):
         self.conn.close()

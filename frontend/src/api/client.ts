@@ -34,10 +34,10 @@ export const api = {
       body: JSON.stringify({ genre, count, include_remixes }),
     }),
   getDownloadStatus: (taskId: string) => request<any>(`/downloads/status/${taskId}`),
-  downloadTracks: (track_ids: number[], genre_folder: string) =>
+  downloadTracks: (track_ids: number[], genre_folder: string, analyze_after = false) =>
     request<{ task_id: string }>('/downloads/', {
       method: 'POST',
-      body: JSON.stringify({ track_ids, genre_folder }),
+      body: JSON.stringify({ track_ids, genre_folder, analyze_after }),
     }),
   resolveUrl: (url: string) =>
     request<any>('/downloads/resolve-url', {
@@ -90,6 +90,9 @@ export const api = {
     }),
   deletePlaylist: (id: number) =>
     request<any>(`/downloads/playlists/${id}`, { method: 'DELETE' }),
+
+  // Analysis
+  getAnalysisStats: () => request<any>('/analysis/stats'),
 
   // Waveform
   getWaveform: (trackId: number) => request<any>(`/analysis/waveform/${trackId}`),

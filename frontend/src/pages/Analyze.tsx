@@ -112,7 +112,7 @@ export default function Analyze() {
       body: JSON.stringify({ folder_path: importPath, genre_folder: importGenre }),
     });
     const data = await res.json();
-    setImportMsg(data.error ? `Error: ${data.error}` : `Imported ${data.imported}, ${data.skipped} skipped`);
+    setImportMsg(data.error ? `Error: ${data.error}` : data.manifest ? `Restored ${data.imported} tracks from library manifest${data.tags_restored ? `, ${data.tags_restored} tags` : ''}` : `Imported ${data.imported} new${data.matched ? `, ${data.matched} matched existing` : ''}, ${data.skipped} skipped`);
     setImporting(false);
     loadData();
   };

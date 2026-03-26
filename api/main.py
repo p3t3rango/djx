@@ -3,21 +3,26 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from core.database import Database
-from api.dependencies import get_sc
+from api.dependencies import get_db, get_sc
 from api.routers import discovery, downloads, search, accounts, settings, analysis
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state._sc = None  # Lazy init via get_sc dependency
-    # Migrate legacy manifests on startup
-    startup_db = Database("sc_discover.db")
+    app.state._sc = None
+    db_path = os.environ.get("DJX_DB_PATH", "sc_discover.db")
+    download_dir = os.environ.get("DJX_DOWNLOAD_DIR", "downloads")
+    startup_db = Database(db_path)
     startup_db.migrate_manifests(
-        startup_db.get_setting("download_dir") or "downloads"
+        startup_db.get_setting("download_dir") or download_dir
     )
+    # Set default download dir if not set
+    if not startup_db.get_setting("download_dir"):
+        startup_db.set_setting("download_dir", download_dir)
     startup_db.close()
     yield
 
@@ -64,8 +69,16 @@ def pick_folder():
 
 
 @app.get("/api/stream/{track_id}")
-def stream_track(track_id: int, sc=Depends(get_sc)):
-    """Get a streamable URL for a SoundCloud track."""
+def stream_track(track_id: int, db=Depends(get_db), sc=Depends(get_sc)):
+    """Stream a track — prefer local file, fall back to SoundCloud."""
+    # Priority 0: Local file on disk (already downloaded)
+    row = db.conn.execute(
+        "SELECT file_path FROM downloads WHERE track_id = ? AND file_path IS NOT NULL LIMIT 1",
+        (track_id,)
+    ).fetchone()
+    if row and row["file_path"] and os.path.exists(row["file_path"]):
+        return FileResponse(row["file_path"], media_type="audio/mpeg")
+
     import requests as req
     try:
         track = sc.get_track(track_id)
@@ -123,7 +136,8 @@ def stream_track(track_id: int, sc=Depends(get_sc)):
 
 
 # Serve React frontend if built
+# Serve React frontend — check env var first (Electron), then default path
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-frontend_dist = os.path.join(_project_root, "frontend", "dist")
+frontend_dist = os.environ.get("DJX_FRONTEND_DIR", os.path.join(_project_root, "frontend", "dist"))
 if os.path.isdir(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

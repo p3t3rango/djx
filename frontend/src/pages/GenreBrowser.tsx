@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Loader2, Download, Play, Pause, ExternalLink, TrendingUp, Flame, Sparkles, Link2 } from 'lucide-react';
+import { Loader2, Download, Play, Pause, ExternalLink, TrendingUp, Flame, Sparkles, Link2, Zap } from 'lucide-react';
 import { api } from '../api/client';
 import { usePlayer, type PlayerTrack } from '../components/PlayerContext';
 
@@ -26,6 +26,7 @@ export default function GenreBrowser() {
   const [downloadMsg, setDownloadMsg] = useState('');
   const [count, setCount] = useState(50);
   const [includeRemixes, setIncludeRemixes] = useState(false);
+  const [analyzeAfter, setAnalyzeAfter] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [relatedInput, setRelatedInput] = useState('');
   const player = usePlayer();
@@ -106,7 +107,7 @@ export default function GenreBrowser() {
     setDownloading(true);
     setDownloadMsg('Queuing...');
     const folder = selectedGenre ? (genres[selectedGenre]?.folder || selectedGenre) : 'related';
-    const { task_id } = await api.downloadTracks(Array.from(selected), folder);
+    const { task_id } = await api.downloadTracks(Array.from(selected), folder, analyzeAfter);
     const poll = setInterval(async () => {
       const status = await api.getDownloadStatus(task_id);
       setDownloadMsg(status.message || status.status);
@@ -121,8 +122,14 @@ export default function GenreBrowser() {
   };
 
   const formatPlays = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n);
-  const scoreColor = (s: number) => s >= 1000 ? 'score-viral' : s >= 200 ? 'score-hot' : s >= 50 ? 'score-rising' : 'score-steady';
-  const scoreLabel = (s: number) => s >= 1000 ? 'VIRAL' : s >= 200 ? 'HOT' : s >= 50 ? 'RISING' : '';
+  // Dynamic thresholds per sort mode
+  const thresholds = sortMode === 'popular'
+    ? { viral: 65, hot: 55, rising: 45 }
+    : sortMode === 'fresh'
+    ? { viral: 220, hot: 180, rising: 130 }
+    : { viral: 300, hot: 200, rising: 100 };  // trending
+  const scoreColor = (s: number) => s >= thresholds.viral ? 'score-viral' : s >= thresholds.hot ? 'score-hot' : s >= thresholds.rising ? 'score-rising' : 'score-steady';
+  const scoreLabel = (s: number) => s >= thresholds.viral ? 'VIRAL' : s >= thresholds.hot ? 'HOT' : s >= thresholds.rising ? 'RISING' : '';
 
   const renderTable = (trackList: any[], title?: string) => (
     <div className={title ? 'mt-6' : ''}>
@@ -255,9 +262,9 @@ export default function GenreBrowser() {
           <div className="flex-1" />
           <div className="flex items-center gap-3 text-[10px]">
             <span>SCORE:</span>
-            <span className="score-viral">1K+ VIRAL</span>
-            <span className="score-hot">200+ HOT</span>
-            <span className="score-rising">50+ RISING</span>
+            <span className="score-viral">{thresholds.viral}+ VIRAL</span>
+            <span className="score-hot">{thresholds.hot}+ HOT</span>
+            <span className="score-rising">{thresholds.rising}+ RISING</span>
           </div>
         </div>
       )}
@@ -278,6 +285,11 @@ export default function GenreBrowser() {
               <button onClick={selectAll} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">ALL</button>
               <button onClick={selectNone} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">NONE</button>
             </div>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-mono">
+              <input type="checkbox" checked={analyzeAfter} onChange={e => setAnalyzeAfter(e.target.checked)} />
+              <Zap size={11} className={analyzeAfter ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)]'} />
+              <span className="text-[var(--color-text-dim)]">ANALYZE</span>
+            </label>
             <button onClick={downloadSelected} disabled={downloading || !selected.size}
               className="glow-btn px-4 py-2 rounded text-[11px] font-mono flex items-center gap-2">
               {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}

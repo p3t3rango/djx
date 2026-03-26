@@ -1,10 +1,11 @@
+import os
 import threading
 from fastapi import Request
 from soundcloud import SoundCloud
 from core.database import Database
 
 _sc_lock = threading.Lock()
-_db_path = "sc_discover.db"
+_db_path = os.environ.get("DJX_DB_PATH", "sc_discover.db")
 
 
 def get_db(request: Request) -> Database:

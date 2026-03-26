@@ -16,9 +16,19 @@ from core.download_service import DownloadService
 router = APIRouter()
 
 
+def _save_manifest(db):
+    """Auto-save library manifest after downloads/analysis."""
+    try:
+        download_dir = db.get_setting("download_dir") or "downloads"
+        db.export_library_manifest(download_dir)
+    except Exception:
+        pass  # non-critical
+
+
 class DownloadRequest(BaseModel):
     track_ids: List[int]
     genre_folder: str
+    analyze_after: bool = False
 
 
 class BatchDownloadRequest(BaseModel):
@@ -33,7 +43,7 @@ class UrlDownloadRequest(BaseModel):
     analyze_after: bool = False
 
 
-def _run_download(task, sc, db_path, track_ids, genre_folder):
+def _run_download(task, sc, db_path, track_ids, genre_folder, analyze_after=False):
     """Run download in a thread with its own DB connection."""
     from core.database import Database
     from core.models import Track
@@ -50,7 +60,26 @@ def _run_download(task, sc, db_path, track_ids, genre_folder):
         task.message = f"Downloading {len(tracks)} tracks..."
         report = svc.download_tracks(tracks, genre_folder)
         task.result = report.model_dump()
+
+        if analyze_after and report.downloaded > 0:
+            from core.analysis_service import AnalysisService
+            task.message = "Analyzing downloaded tracks..."
+            analysis_svc = AnalysisService(thread_db)
+            pairs = []
+            for r in report.results:
+                if r.status == "downloaded" and r.file_path:
+                    pairs.append((r.track_id, r.file_path))
+            if pairs:
+                result = analysis_svc.analyze_batch(
+                    pairs,
+                    on_progress=lambda i, total, fp: setattr(
+                        task, 'message', f"Analyzing {i+1}/{total}: {fp.split('/')[-1][:40]}"
+                    ),
+                )
+                task.result["analysis"] = result
+
         task.status = "completed"
+        _save_manifest(thread_db)
         thread_db.close()
     except Exception as e:
         task.error = str(e)
@@ -83,10 +112,12 @@ def _run_batch(task, sc, db_path, genre, count, include_remixes):
 
         task.result = result
         task.status = "completed"
+        _save_manifest(thread_db)
         thread_db.close()
     except Exception as e:
         task.error = str(e)
         task.status = "failed"
+
 
 
 @router.post("/")
@@ -94,7 +125,7 @@ def download_tracks(req: DownloadRequest, db=Depends(get_db), sc=Depends(get_sc)
     task = create_task()
     t = threading.Thread(
         target=_run_download,
-        args=(task, sc, db.db_path, req.track_ids, req.genre_folder),
+        args=(task, sc, db.db_path, req.track_ids, req.genre_folder, req.analyze_after),
         daemon=True
     )
     t.start()

@@ -7,7 +7,7 @@ from soundcloud import SoundCloud
 from core.config import GENRES, REMIX_SUFFIXES, get_int_setting, get_float_setting
 from core.database import Database
 from core.models import Track
-from core.trending import compute_trending_score
+from core.trending import compute_trending_score, compute_popular_score, compute_fresh_score
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +63,18 @@ class DiscoveryService:
             related = self._related_expansion(tracks[:5], remaining, seen, genre_key, delay)
             tracks.extend(related)
 
-        # Score all tracks
-        for t in tracks:
-            t.trending_score = compute_trending_score(t)
-
-        # Sort based on mode
+        # Score and sort based on mode
         if sort == "popular":
-            tracks.sort(key=lambda t: t.playback_count, reverse=True)
+            for t in tracks:
+                t.trending_score = compute_popular_score(t)
+            tracks.sort(key=lambda t: t.trending_score, reverse=True)
         elif sort == "fresh":
-            tracks.sort(key=lambda t: t.created_at or "", reverse=True)
+            for t in tracks:
+                t.trending_score = compute_fresh_score(t)
+            tracks.sort(key=lambda t: t.trending_score, reverse=True)
         else:  # "trending"
+            for t in tracks:
+                t.trending_score = compute_trending_score(t)
             tracks.sort(key=lambda t: t.trending_score, reverse=True)
 
         result = tracks[:target]

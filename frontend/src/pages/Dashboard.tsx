@@ -200,10 +200,11 @@ export default function Dashboard() {
                       className={`p-1 rounded-full shrink-0 ${isActive ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-glow)]'}`}>
                       {isPlaying ? <Pause size={12} /> : <Play size={12} />}
                     </button>
-                    <div className="min-w-0 flex-1">
+                    <button onClick={() => navigate(`/downloads?genre=${d.genre_folder}&track=${d.track_id}`)}
+                      className="min-w-0 flex-1 text-left hover:text-[var(--color-glow)] transition-colors">
                       <div className="text-xs font-mono truncate">{d.title}</div>
                       <div className="text-[10px] text-[var(--color-text-dim)]">{d.artist}</div>
-                    </div>
+                    </button>
                     <span className="text-[10px] font-mono text-[var(--color-text-dim)] shrink-0">{d.genre_folder}</span>
                   </div>
                 );

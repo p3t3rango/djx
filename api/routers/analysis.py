@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_db
 from api.tasks import create_task, get_task
+from api.routers.downloads import _save_manifest
 
 router = APIRouter()
 
@@ -59,6 +60,7 @@ def _run_analysis(task, db_path, track_ids=None, genre_folder=None, all_unanalyz
         task.result = result
         task.status = "completed"
         task.message = f"Done: {result['success']} analyzed, {result['failed']} failed"
+        _save_manifest(thread_db)
         thread_db.close()
     except Exception as e:
         task.error = str(e)
@@ -237,44 +239,104 @@ class ImportFolderRequest(BaseModel):
 
 @router.post("/import-folder")
 def import_folder(req: ImportFolderRequest, db=Depends(get_db)):
-    """Scan a folder for audio files and add them to the library."""
+    """Scan a folder for audio files and add them to the library.
+
+    If a djx_library.json manifest exists in the folder, uses it to restore
+    all metadata (analysis, tags, playlists, SoundCloud URLs) from a prior library.
+    Otherwise, does smart filename matching and imports new files.
+    """
     import os
     import hashlib
+    import shutil
     from core.utils import ensure_directory
 
     folder = os.path.expanduser(req.folder_path)
     if not os.path.isdir(folder):
         return {"error": f"Folder not found: {folder}"}
 
+    # Check for djx_library.json manifest — full metadata restore
+    manifest_path = os.path.join(folder, "djx_library.json")
+    if os.path.exists(manifest_path):
+        result = db.import_library_manifest(manifest_path, folder)
+        # Also export manifest to the app's download dir so it stays synced
+        download_dir = db.get_setting("download_dir") or "downloads"
+        db.export_library_manifest(download_dir)
+        return {
+            "imported": result["imported_tracks"],
+            "skipped": result["skipped_tracks"],
+            "matched": 0,
+            "manifest": True,
+            "tags_restored": result["imported_tags"],
+        }
+
     download_dir = db.get_setting("download_dir") or "downloads"
-    target_dir = os.path.join(download_dir, req.genre_folder)
-    ensure_directory(target_dir)
+
+    # Build a set of known file paths and filenames for fast matching
+    known_paths = set()
+    known_filenames = {}  # filename -> track_id (for matching relocated files)
+    for row in db.conn.execute(
+        "SELECT track_id, file_path FROM downloads WHERE file_path IS NOT NULL"
+    ).fetchall():
+        fp = row["file_path"]
+        known_paths.add(os.path.abspath(fp))
+        known_filenames[os.path.basename(fp)] = row["track_id"]
 
     imported = 0
     skipped = 0
-    for f in os.listdir(folder):
-        if not f.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg')):
+    matched = 0
+    audio_exts = ('.mp3', '.m4a', '.wav', '.flac', '.aac', '.ogg')
+
+    # Walk recursively so genre subfolders are included
+    audio_files = []
+    for dirpath, _, filenames in os.walk(folder):
+        for f in filenames:
+            if f.lower().endswith(audio_exts):
+                audio_files.append((dirpath, f))
+
+    for dirpath, f in audio_files:
+        src = os.path.join(dirpath, f)
+        abs_src = os.path.abspath(src)
+
+        # Check 1: exact file path already in DB — nothing to do
+        if abs_src in known_paths:
+            skipped += 1
             continue
 
-        src = os.path.join(folder, f)
+        # Check 2: same filename exists in DB (e.g. file was downloaded by DJX before)
+        # Update the existing record's file_path to point to this file
+        if f in known_filenames:
+            existing_tid = known_filenames[f]
+            db.conn.execute(
+                "UPDATE downloads SET file_path = ? WHERE track_id = ? AND file_path IS NOT NULL",
+                (abs_src, existing_tid)
+            )
+            matched += 1
+            continue
+
+        # New file — not in DB at all
         # Parse artist - title from filename
         name = f.rsplit('.', 1)[0]
         parts = name.split(' - ', 1)
         artist = parts[0].strip() if len(parts) > 1 else ""
         title = parts[1].strip() if len(parts) > 1 else name.strip()
 
-        # Generate a fake track_id from filename hash (negative to avoid SC ID collision)
-        track_id = -abs(int(hashlib.md5(f.encode()).hexdigest()[:8], 16))
+        # Generate a track_id from path hash (negative to avoid SC ID collision)
+        rel_path = os.path.relpath(src, folder)
+        track_id = -abs(int(hashlib.md5(rel_path.encode()).hexdigest()[:8], 16))
 
-        # Check if already imported
+        # Check if this hash ID already exists (re-import)
         existing = db.conn.execute("SELECT 1 FROM tracks WHERE track_id = ?", (track_id,)).fetchone()
         if existing:
             skipped += 1
             continue
 
-        # Copy file to library
-        import shutil
-        dest = os.path.join(target_dir, f)
+        # Determine genre folder from subfolder name
+        subfolder = os.path.relpath(dirpath, folder)
+        genre = subfolder if subfolder != '.' else req.genre_folder
+        genre_target = os.path.join(download_dir, genre)
+        ensure_directory(genre_target)
+
+        dest = os.path.join(genre_target, f)
         if not os.path.exists(dest):
             shutil.copy2(src, dest)
 
@@ -295,17 +357,26 @@ def import_folder(req: ImportFolderRequest, db=Depends(get_db)):
         db.conn.execute("""
             INSERT OR IGNORE INTO tracks (track_id, title, artist, permalink_url, genre, discovery_source)
             VALUES (?, ?, ?, '', ?, 'imported')
-        """, (track_id, title or f, artist or "", req.genre_folder))
+        """, (track_id, title or f, artist or "", genre))
 
         db.conn.execute("""
             INSERT OR IGNORE INTO downloads (track_id, genre_folder, file_path, file_size_bytes, status, download_method)
             VALUES (?, ?, ?, ?, 'completed', 'imported')
-        """, (track_id, req.genre_folder, dest, file_size))
+        """, (track_id, genre, dest, file_size))
 
         imported += 1
 
     db.conn.commit()
-    return {"imported": imported, "skipped": skipped}
+    _save_manifest(db)
+    return {"imported": imported, "skipped": skipped, "matched": matched}
+
+
+@router.post("/export-manifest")
+def export_manifest(db=Depends(get_db)):
+    """Manually export the library manifest to the download folder."""
+    download_dir = db.get_setting("download_dir") or "downloads"
+    path = db.export_library_manifest(download_dir)
+    return {"path": path}
 
 
 # --- Waveform ---

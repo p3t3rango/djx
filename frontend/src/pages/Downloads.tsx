@@ -12,6 +12,7 @@ export default function Downloads() {
   const [genres, setGenres] = useState<string[]>([]);
   const [selectedGenre, setSelectedGenre] = useState(searchParams.get('genre') || '');
   const [stats, setStats] = useState<any>(null);
+  const [analysisStats, setAnalysisStats] = useState<any>(null);
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -43,6 +44,7 @@ export default function Downloads() {
 
   useEffect(() => {
     api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
+    api.getAnalysisStats().then(setAnalysisStats);
     loadTags();
   }, []);
 
@@ -63,6 +65,25 @@ export default function Downloads() {
     const g = searchParams.get('genre') || '';
     if (g !== selectedGenre) { setSelectedGenre(g); setPage(0); }
   }, [searchParams]);
+
+  // Open track detail when navigated with ?track=ID
+  useEffect(() => {
+    const trackId = searchParams.get('track');
+    if (!trackId) return;
+    // Try to find in current page first
+    const t = downloads.find((d: any) => String(d.track_id) === trackId);
+    if (t) {
+      setDetailTrack(t);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (downloads.length > 0) {
+      // Track not on current page — fetch it directly
+      api.getDownloads(undefined, 500, 0).then(all => {
+        const found = all.find((d: any) => String(d.track_id) === trackId);
+        if (found) setDetailTrack(found);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    }
+  }, [searchParams, downloads]);
 
   useEffect(() => { loadDownloads(); }, [selectedGenre, page]);
 
@@ -121,6 +142,7 @@ export default function Downloads() {
         clearInterval(poll);
         setAnalyzing(false);
         loadDownloads();
+        api.getAnalysisStats().then(setAnalysisStats);
         if (status.result) setAnalyzeMsg(`Done: ${status.result.success} analyzed`);
       }
     }, 2000);
@@ -190,9 +212,11 @@ export default function Downloads() {
       body: JSON.stringify({ folder_path: importPath, genre_folder: importGenre }),
     });
     const data = await res.json();
-    setImportMsg(data.error ? `Error: ${data.error}` : `Imported ${data.imported}, ${data.skipped} skipped`);
+    setImportMsg(data.error ? `Error: ${data.error}` : data.manifest ? `Restored ${data.imported} tracks from library manifest${data.tags_restored ? `, ${data.tags_restored} tags` : ''}` : `Imported ${data.imported} new${data.matched ? `, ${data.matched} matched existing` : ''}, ${data.skipped} skipped`);
     setImporting(false);
     loadDownloads();
+    api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
+    api.getAnalysisStats().then(setAnalysisStats);
   };
 
   const createTag = async () => {
@@ -232,8 +256,8 @@ export default function Downloads() {
     });
   }
 
-  const analyzedCount = downloads.filter(d => d.bpm != null).length;
-  const unanalyzedCount = downloads.filter(d => d.bpm == null && d.file_path).length;
+  const analyzedCount = analysisStats?.analyzed ?? downloads.filter(d => d.bpm != null).length;
+  const unanalyzedCount = analysisStats?.unanalyzed ?? downloads.filter(d => d.bpm == null && d.file_path).length;
 
   return (
     <div>
@@ -271,7 +295,17 @@ export default function Downloads() {
           {camelotMode ? 'CAM' : 'KEY'}
         </button>
 
-        {stats && <span className="text-[10px] font-mono text-[var(--color-text-dim)]">{stats.total} TRACKS</span>}
+        {stats && (
+          <div className="flex items-center gap-3 text-[10px] font-mono">
+            <span className="text-[var(--color-glow)]">{stats.total} TRACKS</span>
+            {analysisStats && (
+              <>
+                <span className="text-[var(--color-text-dim)]">{analysisStats.analyzed} analyzed</span>
+                {analysisStats.unanalyzed > 0 && <span className="text-[var(--color-text-dim)]">{analysisStats.unanalyzed} pending</span>}
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Toolbar row 2 — actions */}

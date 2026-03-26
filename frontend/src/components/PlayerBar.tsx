@@ -1,5 +1,7 @@
-import { Volume2, VolumeX, Play, Pause, SkipBack, SkipForward, ExternalLink, X } from 'lucide-react';
+import { useState } from 'react';
+import { Volume2, VolumeX, Play, Pause, SkipBack, SkipForward, ExternalLink, X, Download, Loader2, Check } from 'lucide-react';
 import { usePlayer } from './PlayerContext';
+import { api } from '../api/client';
 
 function formatTime(s: number) {
   if (!s || !isFinite(s)) return '0:00';
@@ -9,11 +11,38 @@ function formatTime(s: number) {
 
 export default function PlayerBar() {
   const p = usePlayer();
+  const [dlState, setDlState] = useState<'idle' | 'loading' | 'done'>('idle');
+  const [lastDlId, setLastDlId] = useState<number | null>(null);
 
   if (!p.playingTrack && !p.embedTrack) return null;
 
   const track = p.playingTrack || p.embedTrack;
   if (!track) return null;
+
+  // Reset download state when track changes
+  if (track.track_id !== lastDlId && dlState !== 'idle') {
+    setDlState('idle');
+    setLastDlId(null);
+  }
+
+  const handleDownload = async () => {
+    if (dlState !== 'idle') return;
+    setDlState('loading');
+    setLastDlId(track.track_id);
+    try {
+      const { task_id } = await api.downloadTracks([track.track_id], 'downloads', true);
+      // Poll until done
+      const poll = setInterval(async () => {
+        const status = await api.getDownloadStatus(task_id);
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(poll);
+          setDlState(status.status === 'completed' ? 'done' : 'idle');
+        }
+      }, 1500);
+    } catch {
+      setDlState('idle');
+    }
+  };
 
   const embedUrl = (permalink: string) =>
     `https://w.soundcloud.com/player/?url=${encodeURIComponent(permalink)}&color=%2300ffc8&auto_play=true&hide_related=true&show_comments=false&show_user=true&show_reposts=false&show_teaser=false`;
@@ -41,6 +70,14 @@ export default function PlayerBar() {
                   <SkipForward size={14} />
                 </button>
               </>
+            )}
+            {track.track_id > 0 && (
+              <button onClick={handleDownload} disabled={dlState !== 'idle'}
+                className={`p-1 rounded transition-colors ${dlState === 'done' ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-glow)]'}`}
+                title={dlState === 'done' ? 'Downloaded' : 'Download'}>
+                {dlState === 'loading' ? <Loader2 size={12} className="animate-spin" /> :
+                 dlState === 'done' ? <Check size={12} /> : <Download size={12} />}
+              </button>
             )}
             <a href={track.permalink_url} target="_blank" rel="noopener noreferrer"
               className="text-[10px] font-mono text-[var(--color-text-dim)] hover:text-[var(--color-glow)] flex items-center gap-1 transition-colors">
@@ -137,6 +174,14 @@ export default function PlayerBar() {
 
         {/* Actions */}
         <div className="flex items-center gap-1 ml-1">
+          {track.track_id > 0 && (
+            <button onClick={handleDownload} disabled={dlState !== 'idle'}
+              className={`p-1.5 rounded hover:bg-[var(--color-surface-3)] transition-colors ${dlState === 'done' ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)] hover:text-[var(--color-glow)]'}`}
+              title={dlState === 'done' ? 'Downloaded' : 'Download to library'}>
+              {dlState === 'loading' ? <Loader2 size={13} className="animate-spin" /> :
+               dlState === 'done' ? <Check size={13} /> : <Download size={13} />}
+            </button>
+          )}
           <a href={track.permalink_url} target="_blank" rel="noopener noreferrer"
             className="p-1.5 rounded hover:bg-[var(--color-surface-3)] text-[var(--color-text-dim)] hover:text-[var(--color-glow)] transition-colors"
             title="Open in SoundCloud">
