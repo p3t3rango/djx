@@ -232,6 +232,29 @@ async def import_files(db=Depends(get_db)):
     return {"error": "Use /import-folder with a folder path"}
 
 
+class ImportRekordboxRequest(BaseModel):
+    xml_path: str
+
+
+@router.post("/import-rekordbox")
+def import_rekordbox(req: ImportRekordboxRequest, db=Depends(get_db)):
+    """Import tracks from a Rekordbox XML file."""
+    from core.rekordbox_service import RekordboxService
+    svc = RekordboxService(db)
+    result = svc.import_from_xml(req.xml_path)
+    if not result.get("error"):
+        _save_manifest(db)
+    return result
+
+
+@router.get("/detect-rekordbox")
+def detect_rekordbox():
+    """Auto-detect Rekordbox XML on this machine."""
+    from core.rekordbox_service import find_rekordbox_xml
+    path = find_rekordbox_xml()
+    return {"path": path}
+
+
 class ImportFolderRequest(BaseModel):
     folder_path: str
     genre_folder: str = "imported"

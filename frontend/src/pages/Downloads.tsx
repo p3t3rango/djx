@@ -219,6 +219,34 @@ export default function Downloads() {
     api.getAnalysisStats().then(setAnalysisStats);
   };
 
+  const importRekordbox = async () => {
+    setImporting(true);
+    setImportMsg('Detecting Rekordbox...');
+    // Try auto-detect first
+    let xmlPath = importPath.trim();
+    if (!xmlPath || !xmlPath.toLowerCase().endsWith('.xml')) {
+      const detect = await fetch('/api/analysis/detect-rekordbox').then(r => r.json());
+      if (detect.path) {
+        xmlPath = detect.path;
+      } else {
+        setImportMsg('No Rekordbox XML found. Export from Rekordbox first (File > Export Collection in xml format), then enter the path.');
+        setImporting(false);
+        return;
+      }
+    }
+    setImportMsg(`Importing from ${xmlPath}...`);
+    const res = await fetch('/api/analysis/import-rekordbox', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml_path: xmlPath }),
+    });
+    const data = await res.json();
+    setImportMsg(data.error ? `Error: ${data.error}` : `Rekordbox: ${data.imported} imported, ${data.updated} updated, ${data.skipped} skipped (${data.total_in_xml} in XML)`);
+    setImporting(false);
+    loadDownloads();
+    api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
+    api.getAnalysisStats().then(setAnalysisStats);
+  };
+
   const createTag = async () => {
     if (!newTagName.trim()) return;
     await api.createTag(newTagName.trim(), newTagColor);
@@ -394,6 +422,16 @@ export default function Downloads() {
             <button onClick={importFiles} disabled={importing} className="glow-btn px-4 py-2 rounded text-[11px] font-mono disabled:opacity-40">
               {importing ? <Loader2 size={12} className="animate-spin" /> : 'IMPORT'}
             </button>
+          </div>
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-[var(--color-border)]">
+            <span className="text-[10px] font-mono text-[var(--color-text-dim)]">OR</span>
+            <button onClick={importRekordbox} disabled={importing}
+              className="px-4 py-2 rounded text-[11px] font-mono border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-glow)] hover:border-[var(--color-border-glow)] transition-colors disabled:opacity-40">
+              {importing ? <Loader2 size={12} className="animate-spin" /> : 'IMPORT REKORDBOX XML'}
+            </button>
+            <span className="text-[9px] font-mono text-[var(--color-text-dim)]">
+              Auto-detects or enter path to .xml above
+            </span>
           </div>
           {importMsg && <p className="text-[10px] font-mono text-[var(--color-glow)] mt-2">{importMsg}</p>}
         </div>
