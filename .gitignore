@@ -11,3 +11,5 @@ downloads/
 rekordbox_export.xml
 /tmp/
 *.manifest.json.migrated
+.env.signing
+electron/dist/
