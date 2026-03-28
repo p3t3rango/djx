@@ -91,6 +91,7 @@ class Database:
             "ALTER TABLE tracks ADD COLUMN analyzed_at TEXT",
             "ALTER TABLE tracks ADD COLUMN beats_json TEXT",
             "ALTER TABLE tracks ADD COLUMN cues_json TEXT",  # hot cues, memory cues, loops
+            "ALTER TABLE tracks ADD COLUMN energy INTEGER",  # 1-10 energy level (Beatport scale)
         ]
         for sql in migrations:
             try:
@@ -233,8 +234,9 @@ class Database:
         self.conn.commit()
 
     def get_downloads(self, genre: str = None, status: str = None,
-                      limit: int = 50, offset: int = 0) -> List[dict]:
-        query = "SELECT d.id, d.track_id, d.genre_folder, d.file_path, d.file_size_bytes, d.download_method, d.status, d.downloaded_at, COALESCE(t.title, '') as title, COALESCE(t.artist, '') as artist, COALESCE(t.permalink_url, '') as permalink_url, COALESCE(t.playback_count, 0) as playback_count, t.bpm, t.musical_key, t.camelot_key, t.cues_json, t.analyzed_at FROM downloads d LEFT JOIN tracks t ON d.track_id = t.track_id WHERE 1=1"
+                      limit: int = 50, offset: int = 0,
+                      min_energy: int = None, max_energy: int = None) -> List[dict]:
+        query = "SELECT d.id, d.track_id, d.genre_folder, d.file_path, d.file_size_bytes, d.download_method, d.status, d.downloaded_at, COALESCE(t.title, '') as title, COALESCE(t.artist, '') as artist, COALESCE(t.permalink_url, '') as permalink_url, COALESCE(t.playback_count, 0) as playback_count, t.bpm, t.musical_key, t.camelot_key, t.cues_json, t.analyzed_at, t.artwork_url, t.energy FROM downloads d LEFT JOIN tracks t ON d.track_id = t.track_id WHERE 1=1"
         params = []
         if genre:
             query += " AND d.genre_folder = ?"
@@ -242,6 +244,12 @@ class Database:
         if status:
             query += " AND d.status = ?"
             params.append(status)
+        if min_energy is not None:
+            query += " AND t.energy >= ?"
+            params.append(min_energy)
+        if max_energy is not None:
+            query += " AND t.energy <= ?"
+            params.append(max_energy)
         query += " ORDER BY d.downloaded_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return [dict(r) for r in self.conn.execute(query, params).fetchall()]
@@ -428,13 +436,14 @@ class Database:
                         key_confidence = COALESCE(key_confidence, ?), analyzed_at = COALESCE(analyzed_at, ?),
                         beats_json = COALESCE(beats_json, ?), cues_json = COALESCE(cues_json, ?),
                         permalink_url = CASE WHEN permalink_url = '' THEN ? ELSE permalink_url END,
-                        artwork_url = COALESCE(artwork_url, ?)
+                        artwork_url = COALESCE(artwork_url, ?),
+                        energy = COALESCE(energy, ?)
                     WHERE track_id = ?
                 """, (
                     t.get("bpm"), t.get("musical_key"), t.get("camelot_key"),
                     t.get("bpm_confidence"), t.get("key_confidence"), t.get("analyzed_at"),
                     t.get("beats_json"), t.get("cues_json"),
-                    t.get("permalink_url", ""), t.get("artwork_url"),
+                    t.get("permalink_url", ""), t.get("artwork_url"), t.get("energy"),
                     track_id,
                 ))
                 # Update file path in downloads
@@ -447,8 +456,8 @@ class Database:
                     (track_id, title, artist, permalink_url, genre, tags, playback_count,
                      likes_count, repost_count, duration_seconds, artwork_url, discovery_source,
                      bpm, musical_key, camelot_key, bpm_confidence, key_confidence, analyzed_at,
-                     beats_json, cues_json)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     beats_json, cues_json, energy)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
                     track_id, t.get("title", ""), t.get("artist", ""),
                     t.get("permalink_url", ""), t.get("genre", ""), t.get("tags", ""),
@@ -457,7 +466,7 @@ class Database:
                     t.get("artwork_url"), t.get("discovery_source"),
                     t.get("bpm"), t.get("musical_key"), t.get("camelot_key"),
                     t.get("bpm_confidence"), t.get("key_confidence"), t.get("analyzed_at"),
-                    t.get("beats_json"), t.get("cues_json"),
+                    t.get("beats_json"), t.get("cues_json"), t.get("energy"),
                 ))
                 self.conn.execute("""
                     INSERT OR IGNORE INTO downloads (track_id, genre_folder, file_path, file_size_bytes, status, download_method)

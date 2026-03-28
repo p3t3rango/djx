@@ -22,6 +22,7 @@ export default function TrackDetail({ track, onClose, onAnalyzed }: {
   const [beats, setBeats] = useState<number[]>([]);
   const [bpm, setBpm] = useState<number | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
+  const [generatingCues, setGeneratingCues] = useState(false);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzed, setAnalyzed] = useState(track.bpm != null);
@@ -564,6 +565,25 @@ export default function TrackDetail({ track, onClose, onAnalyzed }: {
           </button>
           {cues.length > 0 && (
             <button onClick={saveCues} className="glow-btn px-2 py-0.5 rounded text-[9px] font-mono">SAVE CUES</button>
+          )}
+          <button onClick={async () => {
+            if (cues.length > 0 && !confirm(`This track has ${cues.length} existing cues. Auto-generate will replace them. Continue?`)) return;
+            setGeneratingCues(true);
+            const data = await api.generateCues(track.track_id);
+            if (data.cues) setCues(data.cues);
+            setGeneratingCues(false);
+          }} disabled={generatingCues}
+            className="px-2 py-0.5 rounded text-[9px] font-mono border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-glow)] hover:border-[var(--color-border-glow)] transition-colors disabled:opacity-40">
+            {generatingCues ? <Loader2 size={10} className="animate-spin" /> : 'AUTO CUES'}
+          </button>
+          {cues.length > 0 && (
+            <button onClick={async () => {
+              await api.clearCues(track.track_id);
+              setCues([]);
+            }}
+              className="px-2 py-0.5 rounded text-[9px] font-mono border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors">
+              CLEAR
+            </button>
           )}
         </div>
 

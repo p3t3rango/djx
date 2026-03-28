@@ -29,6 +29,7 @@ class DownloadRequest(BaseModel):
     track_ids: List[int]
     genre_folder: str
     analyze_after: bool = False
+    download_art: bool = True
 
 
 class BatchDownloadRequest(BaseModel):
@@ -56,7 +57,7 @@ class UrlDownloadRequest(BaseModel):
     analyze_after: bool = False
 
 
-def _run_download(task, sc, db_path, track_ids, genre_folder, analyze_after=False):
+def _run_download(task, sc, db_path, track_ids, genre_folder, analyze_after=False, download_art=True):
     """Run download in a thread with its own DB connection."""
     from core.database import Database
     from core.models import Track
@@ -71,7 +72,7 @@ def _run_download(task, sc, db_path, track_ids, genre_folder, analyze_after=Fals
                 tracks.append(Track.from_db_row(row))
 
         task.message = f"Downloading {len(tracks)} tracks..."
-        report = svc.download_tracks(tracks, genre_folder)
+        report = svc.download_tracks(tracks, genre_folder, download_art=download_art)
         task.result = report.model_dump()
 
         if analyze_after and report.downloaded > 0:
@@ -138,7 +139,7 @@ def download_tracks(req: DownloadRequest, db=Depends(get_db), sc=Depends(get_sc)
     task = create_task()
     t = threading.Thread(
         target=_run_download,
-        args=(task, sc, db.db_path, req.track_ids, req.genre_folder, req.analyze_after),
+        args=(task, sc, db.db_path, req.track_ids, req.genre_folder, req.analyze_after, req.download_art),
         daemon=True
     )
     t.start()
@@ -354,8 +355,11 @@ def download_status(task_id: str):
 
 @router.get("/")
 def list_downloads(genre: Optional[str] = None, status: Optional[str] = None,
-                   limit: int = 100, offset: int = 0, db=Depends(get_db)):
-    return db.get_downloads(genre=genre, status=status, limit=limit, offset=offset)
+                   limit: int = 100, offset: int = 0,
+                   min_energy: Optional[int] = None, max_energy: Optional[int] = None,
+                   db=Depends(get_db)):
+    return db.get_downloads(genre=genre, status=status, limit=limit, offset=offset,
+                            min_energy=min_energy, max_energy=max_energy)
 
 
 @router.get("/stats")

@@ -24,7 +24,8 @@ class DownloadService:
         self.db = db
 
     def download_tracks(self, tracks: List[Track], genre_folder: str,
-                        on_progress: Optional[Callable] = None) -> DownloadReport:
+                        on_progress: Optional[Callable] = None,
+                        download_art: bool = True) -> DownloadReport:
         base_dir = get_setting("download_dir", self.db)
         output_dir = os.path.join(base_dir, genre_folder)
         ensure_directory(output_dir)
@@ -64,6 +65,11 @@ class DownloadService:
                     track.track_id, genre_folder, file_path=file_path,
                     file_size=file_size, method=method, status="completed"
                 )
+
+                # Download and embed artwork
+                if download_art and track.artwork_url and file_path:
+                    self._download_artwork(track, base_dir, file_path)
+
                 report.downloaded += 1
                 report.results.append(DownloadResult(
                     track_id=track.track_id, title=track.title,
@@ -230,6 +236,49 @@ class DownloadService:
             if os.path.exists(filepath):
                 os.remove(filepath)
             return None
+
+    def _download_artwork(self, track: Track, base_dir: str, audio_path: str):
+        """Download cover art to artwork/ folder and embed in MP3 ID3 tags."""
+        try:
+            # Get high-res artwork URL (500x500)
+            art_url = track.artwork_url.replace("-large", "-t500x500")
+
+            resp = requests.get(art_url, timeout=15)
+            if resp.status_code != 200 or len(resp.content) < 500:
+                return
+
+            img_data = resp.content
+            ext = "jpg" if "jpeg" in resp.headers.get("content-type", "") else "jpg"
+
+            # Save to artwork/ subfolder
+            art_dir = os.path.join(base_dir, "artwork")
+            ensure_directory(art_dir)
+            art_path = os.path.join(art_dir, f"{track.safe_filename}.{ext}")
+            with open(art_path, "wb") as f:
+                f.write(img_data)
+
+            # Embed in MP3 ID3 tags
+            if audio_path and audio_path.lower().endswith(".mp3"):
+                try:
+                    from mutagen.id3 import ID3, APIC, ID3NoHeaderError
+                    try:
+                        tags = ID3(audio_path)
+                    except ID3NoHeaderError:
+                        tags = ID3()
+                    tags.delall("APIC")
+                    tags.add(APIC(
+                        encoding=3,
+                        mime="image/jpeg",
+                        type=3,  # Cover (front)
+                        desc="Cover",
+                        data=img_data,
+                    ))
+                    tags.save(audio_path)
+                except Exception:
+                    pass  # Don't fail download if ID3 embedding fails
+
+        except Exception:
+            pass  # Don't fail download if artwork fetch fails
 
     def _file_exists(self, track: Track, output_dir: str) -> bool:
         pattern = os.path.join(output_dir, f"{track.safe_filename}.*")

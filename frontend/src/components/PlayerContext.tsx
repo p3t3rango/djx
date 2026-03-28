@@ -83,55 +83,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
     try {
       const res = await fetch(`/api/stream/${track.track_id}`);
-      const contentType = res.headers.get('content-type') || '';
-
-      // Local file served directly as audio bytes
-      if (contentType.startsWith('audio/')) {
-        const blob = await res.blob();
-        const blobUrl = URL.createObjectURL(blob);
-
-        const audio = new Audio();
-        audio.volume = volume;
-        audioRef.current = audio;
-
-        audio.ontimeupdate = () => {
-          setProgress(audio.currentTime);
-          setDuration(audio.duration || 0);
-        };
-        audio.onended = () => {
-          URL.revokeObjectURL(blobUrl);
-          setIsPlaying(false);
-          setProgress(0);
-          setQueueIndex(prev => {
-            const nextIdx = prev + 1;
-            if (nextIdx < queue.length) {
-              setTimeout(() => loadTrack(queue[nextIdx]), 100);
-              return nextIdx;
-            }
-            return prev;
-          });
-        };
-        const onError = () => {
-          URL.revokeObjectURL(blobUrl);
-          cleanup();
-          setIsLoading(false);
-          setFailed(true);
-          setEmbedTrack(track);
-        };
-        audio.onerror = onError;
-        audio.oncanplay = () => { setIsLoading(false); setIsPlaying(true); };
-        audio.src = blobUrl;
-        audio.play().catch(onError);
-        return;
-      }
-
-      // JSON response — SoundCloud stream URL
       const data = await res.json();
 
       if (data.error || data.type === 'embed' || !data.url) {
         setIsLoading(false);
         setFailed(true);
-        setEmbedTrack(track);
+        if (data.type === 'embed') setEmbedTrack(track);
         return;
       }
 
@@ -147,6 +104,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       audio.onended = () => {
         setIsPlaying(false);
         setProgress(0);
+        // Auto-advance to next track
         setQueueIndex(prev => {
           const nextIdx = prev + 1;
           if (nextIdx < queue.length) {
@@ -161,7 +119,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         cleanup();
         setIsLoading(false);
         setFailed(true);
-        setEmbedTrack(track);
       };
 
       audio.onerror = onError;
@@ -184,7 +141,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     } catch {
       setIsLoading(false);
       setFailed(true);
-      setEmbedTrack(track);
     }
   }, [cleanup, volume, queue]);
 

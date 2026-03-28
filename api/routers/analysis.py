@@ -15,9 +15,11 @@ class AnalyzeRequest(BaseModel):
     track_ids: Optional[List[int]] = None
     genre_folder: Optional[str] = None
     all_unanalyzed: bool = False
+    force: bool = False  # Re-analyze even if already analyzed
+    all_tracks: bool = False  # Analyze ALL tracks (for re-analysis)
 
 
-def _run_analysis(task, db_path, track_ids=None, genre_folder=None, all_unanalyzed=False):
+def _run_analysis(task, db_path, track_ids=None, genre_folder=None, all_unanalyzed=False, force=False, all_tracks=False):
     from core.database import Database
     from core.analysis_service import AnalysisService
 
@@ -27,7 +29,10 @@ def _run_analysis(task, db_path, track_ids=None, genre_folder=None, all_unanalyz
         svc = AnalysisService(thread_db)
 
         # Determine which tracks to analyze
-        if all_unanalyzed:
+        if all_tracks:
+            items = svc.get_all_tracks_with_files()
+            pairs = [(r["track_id"], r["file_path"]) for r in items]
+        elif all_unanalyzed:
             items = svc.get_unanalyzed_tracks()
             pairs = [(r["track_id"], r["file_path"]) for r in items]
         elif track_ids:
@@ -56,6 +61,7 @@ def _run_analysis(task, db_path, track_ids=None, genre_folder=None, all_unanalyz
             on_progress=lambda i, total, fp: setattr(
                 task, 'message', f"Analyzing {i+1}/{total}: {fp.split('/')[-1][:40]}"
             ),
+            force=force,
         )
         task.result = result
         task.status = "completed"
@@ -72,7 +78,7 @@ def analyze_tracks(req: AnalyzeRequest, db=Depends(get_db)):
     task = create_task()
     t = threading.Thread(
         target=_run_analysis,
-        args=(task, db.db_path, req.track_ids, req.genre_folder, req.all_unanalyzed),
+        args=(task, db.db_path, req.track_ids, req.genre_folder, req.all_unanalyzed, req.force, req.all_tracks),
         daemon=True
     )
     t.start()
@@ -95,6 +101,25 @@ def analysis_stats(db=Depends(get_db)):
     from core.analysis_service import AnalysisService
     svc = AnalysisService(db)
     return svc.get_analysis_stats()
+
+
+@router.post("/generate-cues/{track_id}")
+def generate_cues(track_id: int, db=Depends(get_db)):
+    """Auto-generate 8 hot cues for a track using structural analysis."""
+    from core.analysis_service import AnalysisService
+    svc = AnalysisService(db)
+    cues = svc.generate_cues_for_track(track_id)
+    _save_manifest(db)
+    return {"cues": cues, "count": len(cues)}
+
+
+@router.delete("/cues/{track_id}")
+def clear_cues(track_id: int, db=Depends(get_db)):
+    """Clear all cue points for a track."""
+    db.conn.execute("UPDATE tracks SET cues_json = NULL WHERE track_id = ?", (track_id,))
+    db.conn.commit()
+    _save_manifest(db)
+    return {"cleared": True}
 
 
 @router.get("/tracks")

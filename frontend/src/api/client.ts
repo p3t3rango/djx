@@ -25,8 +25,13 @@ export const api = {
   getDiscoveryStatus: (taskId: string) => request<any>(`/discovery/status/${taskId}`),
 
   // Downloads
-  getDownloads: (genre?: string, limit = 50, offset = 0) =>
-    request<any[]>(`/downloads/?${genre ? `genre=${genre}&` : ''}limit=${limit}&offset=${offset}`),
+  getDownloads: (genre?: string, limit = 50, offset = 0, minEnergy?: number, maxEnergy?: number) => {
+    let url = `/downloads/?limit=${limit}&offset=${offset}`;
+    if (genre) url += `&genre=${genre}`;
+    if (minEnergy != null) url += `&min_energy=${minEnergy}`;
+    if (maxEnergy != null) url += `&max_energy=${maxEnergy}`;
+    return request<any[]>(url);
+  },
   getDownloadStats: () => request<any>('/downloads/stats'),
   batchDownload: (genre: string, count: number, include_remixes: boolean) =>
     request<{ task_id: string }>('/downloads/batch', {
@@ -34,10 +39,10 @@ export const api = {
       body: JSON.stringify({ genre, count, include_remixes }),
     }),
   getDownloadStatus: (taskId: string) => request<any>(`/downloads/status/${taskId}`),
-  downloadTracks: (track_ids: number[], genre_folder: string, analyze_after = false) =>
+  downloadTracks: (track_ids: number[], genre_folder: string, analyze_after = false, download_art = true) =>
     request<{ task_id: string }>('/downloads/', {
       method: 'POST',
-      body: JSON.stringify({ track_ids, genre_folder, analyze_after }),
+      body: JSON.stringify({ track_ids, genre_folder, analyze_after, download_art }),
     }),
   resolveUrl: (url: string) =>
     request<any>('/downloads/resolve-url', {
@@ -93,6 +98,15 @@ export const api = {
 
   // Analysis
   getAnalysisStats: () => request<any>('/analysis/stats'),
+  analyzeAll: (force = false) =>
+    request<{ task_id: string }>('/analysis/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ all_tracks: true, force }),
+    }),
+  generateCues: (trackId: number) =>
+    request<any>(`/analysis/generate-cues/${trackId}`, { method: 'POST' }),
+  clearCues: (trackId: number) =>
+    request<any>(`/analysis/cues/${trackId}`, { method: 'DELETE' }),
 
   // Waveform
   getWaveform: (trackId: number) => request<any>(`/analysis/waveform/${trackId}`),

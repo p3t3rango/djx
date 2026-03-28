@@ -19,6 +19,7 @@ export default function Downloads() {
   const [detailTrack, setDetailTrack] = useState<any>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState({ title: '', artist: '', genre: '' });
+  const [minEnergy, setMinEnergy] = useState<number>(0);
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [exportFolder, setExportFolder] = useState('');
@@ -85,10 +86,11 @@ export default function Downloads() {
     }
   }, [searchParams, downloads]);
 
-  useEffect(() => { loadDownloads(); }, [selectedGenre, page]);
+  useEffect(() => { loadDownloads(); }, [selectedGenre, page, minEnergy]);
 
   const loadDownloads = () => {
-    api.getDownloads(selectedGenre || undefined, pageSize, page * pageSize).then(setDownloads);
+    api.getDownloads(selectedGenre || undefined, pageSize, page * pageSize,
+      minEnergy > 0 ? minEnergy : undefined).then(setDownloads);
   };
 
   const changeGenre = (g: string) => {
@@ -317,6 +319,13 @@ export default function Downloads() {
             className="w-full bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded pl-9 pr-3 py-2 text-xs font-mono text-[var(--color-text)] placeholder-[var(--color-text-dim)] focus:outline-none focus:border-[var(--color-border-glow)]" />
         </div>
 
+        <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--color-text-dim)]">
+          <span>NRG</span>
+          <input type="range" min="0" max="10" value={minEnergy} onChange={e => setMinEnergy(+e.target.value)}
+            className="w-20 h-1 accent-[var(--color-glow)]" />
+          <span className="text-[var(--color-glow)] w-6">{minEnergy > 0 ? `${minEnergy}+` : 'ALL'}</span>
+        </div>
+
         <button onClick={() => setCamelotMode(!camelotMode)}
           className="flex items-center gap-1 text-[10px] font-mono text-[var(--color-text-dim)] hover:text-[var(--color-glow)]">
           {camelotMode ? <ToggleRight size={13} className="text-[var(--color-glow)]" /> : <ToggleLeft size={13} />}
@@ -362,6 +371,18 @@ export default function Downloads() {
             className="px-3 py-1.5 rounded text-[10px] font-mono flex items-center gap-1.5 border border-[var(--color-border)] text-[var(--color-text-dim)] hover:text-[var(--color-glow)] hover:border-[var(--color-border-glow)] transition-colors">
             {analyzing ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
             ANALYZE ALL ({unanalyzedCount})
+          </button>
+        )}
+        {selected.size > 0 && (
+          <button onClick={() => {
+            setAnalyzing(true);
+            fetch('/api/analysis/analyze', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ track_ids: Array.from(selected), force: true }),
+            }).then(r => r.json()).then(({ task_id }) => startAnalysis(task_id));
+          }} disabled={analyzing}
+            className="glow-btn px-3 py-1.5 rounded text-[10px] font-mono">
+            RE-ANALYZE {selected.size}
           </button>
         )}
 
@@ -543,6 +564,7 @@ export default function Downloads() {
               <th className="text-left px-2 py-2.5 tracking-wider">TITLE</th>
               <th className="text-left px-2 py-2.5 tracking-wider">ARTIST</th>
               <th className="text-right px-2 py-2.5 tracking-wider">BPM</th>
+              <th className="text-center px-2 py-2.5 tracking-wider">NRG</th>
               <th className="text-left px-2 py-2.5 tracking-wider">KEY</th>
               <th className="text-left px-2 py-2.5 tracking-wider">GENRE</th>
               <th className="text-left px-2 py-2.5 tracking-wider">TAGS</th>
@@ -571,14 +593,19 @@ export default function Downloads() {
                       {isLoading ? <Loader2 size={13} className="animate-spin" /> : isPlaying ? <Pause size={13} /> : <Play size={13} />}
                     </button>
                   </td>
-                  <td className="px-2 py-2 max-w-[200px]">
+                  <td className="px-2 py-2 max-w-[260px]">
                     {isEditing ? (
                       <input value={editData.title} onChange={e => setEditData({...editData, title: e.target.value})}
                         className="w-full bg-[var(--color-surface)] border border-[var(--color-border-glow)] rounded px-2 py-0.5 text-[11px] font-mono text-[var(--color-text)]" />
                     ) : (
                       <button onClick={() => setDetailTrack(isDetailOpen ? null : d)}
-                        className="truncate block text-left w-full text-[var(--color-text)] hover:text-[var(--color-glow)] transition-colors">
-                        {d.title || <span className="italic text-[var(--color-text-dim)]">unknown</span>}
+                        className="flex items-center gap-2.5 w-full text-left hover:text-[var(--color-glow)] transition-colors">
+                        {d.artwork_url ? (
+                          <img src={d.artwork_url.replace('-large', '-small')} alt="" className="w-8 h-8 rounded object-cover shrink-0 bg-[var(--color-surface-3)]" />
+                        ) : (
+                          <div className="w-8 h-8 rounded bg-[var(--color-surface-3)] shrink-0" />
+                        )}
+                        <span className="truncate text-[var(--color-text)]">{d.title || <span className="italic text-[var(--color-text-dim)]">unknown</span>}</span>
                       </button>
                     )}
                   </td>
@@ -590,6 +617,13 @@ export default function Downloads() {
                   </td>
                   <td className="px-2 py-2 text-right">
                     {hasAnalysis ? <span className="text-[var(--color-glow)]">{Math.round(d.bpm)}</span> : <span className="text-[var(--color-text-dim)]">—</span>}
+                  </td>
+                  <td className="px-2 py-2 text-center">
+                    {d.energy ? (
+                      <span className={`font-mono text-[10px] font-bold ${d.energy >= 7 ? 'text-red-400' : d.energy >= 4 ? 'text-yellow-400' : 'text-cyan-400'}`}>
+                        {d.energy}
+                      </span>
+                    ) : <span className="text-[var(--color-text-dim)]">—</span>}
                   </td>
                   <td className="px-2 py-2">
                     {hasAnalysis && keyDisplay ? <span className="text-[var(--color-glow)]">{keyDisplay}</span> : <span className="text-[var(--color-text-dim)]">—</span>}

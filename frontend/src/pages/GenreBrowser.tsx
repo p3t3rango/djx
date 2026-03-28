@@ -27,6 +27,8 @@ export default function GenreBrowser() {
   const [count, setCount] = useState(50);
   const [includeRemixes, setIncludeRemixes] = useState(false);
   const [analyzeAfter, setAnalyzeAfter] = useState(false);
+  const [autoCues, setAutoCues] = useState(false);
+  const [downloadArt, setDownloadArt] = useState(true);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [relatedInput, setRelatedInput] = useState('');
   const player = usePlayer();
@@ -107,7 +109,7 @@ export default function GenreBrowser() {
     setDownloading(true);
     setDownloadMsg('Queuing...');
     const folder = selectedGenre ? (genres[selectedGenre]?.folder || selectedGenre) : 'related';
-    const { task_id } = await api.downloadTracks(Array.from(selected), folder, analyzeAfter);
+    const { task_id } = await api.downloadTracks(Array.from(selected), folder, analyzeAfter, downloadArt);
     const poll = setInterval(async () => {
       const status = await api.getDownloadStatus(task_id);
       setDownloadMsg(status.message || status.status);
@@ -151,6 +153,7 @@ export default function GenreBrowser() {
               <th className="w-8"></th>
               <th className="text-left px-2 py-2.5 tracking-wider">TITLE</th>
               <th className="text-left px-2 py-2.5 tracking-wider">ARTIST</th>
+              <th className="text-left px-2 py-2.5 tracking-wider">GENRE</th>
               <th className="text-right px-2 py-2.5 tracking-wider">PLAYS</th>
               <th className="text-right px-3 py-2.5 tracking-wider">SCORE</th>
               <th className="w-8"></th>
@@ -175,8 +178,18 @@ export default function GenreBrowser() {
                        isThisPlaying ? <Pause size={13} /> : <Play size={13} />}
                     </button>
                   </td>
-                  <td className="px-2 py-2 max-w-[280px] truncate text-[var(--color-text)]">{t.title}</td>
+                  <td className="px-2 py-2 max-w-[360px]">
+                    <div className="flex items-center gap-2.5">
+                      {t.artwork_url ? (
+                        <img src={t.artwork_url.replace('-large', '-small')} alt="" className="w-8 h-8 rounded object-cover shrink-0 bg-[var(--color-surface-3)]" />
+                      ) : (
+                        <div className="w-8 h-8 rounded bg-[var(--color-surface-3)] shrink-0" />
+                      )}
+                      <span className="truncate text-[var(--color-text)]">{t.title}</span>
+                    </div>
+                  </td>
                   <td className="px-2 py-2 max-w-[160px] truncate text-[var(--color-text-dim)]">{t.artist}</td>
+                  <td className="px-2 py-2 max-w-[140px] truncate text-[var(--color-text-dim)] text-[10px]">{t.genre || ''}</td>
                   <td className="px-2 py-2 text-right text-[var(--color-text-dim)]">{formatPlays(t.playback_count)}</td>
                   <td className="px-3 py-2 text-right">
                     <span className={scoreColor(score)}>{score}</span>
@@ -289,6 +302,14 @@ export default function GenreBrowser() {
               <input type="checkbox" checked={analyzeAfter} onChange={e => setAnalyzeAfter(e.target.checked)} />
               <Zap size={11} className={analyzeAfter ? 'text-[var(--color-glow)]' : 'text-[var(--color-text-dim)]'} />
               <span className="text-[var(--color-text-dim)]">ANALYZE</span>
+            </label>
+            <label className={`flex items-center gap-1.5 select-none text-[11px] font-mono ${analyzeAfter ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'}`}>
+              <input type="checkbox" checked={autoCues} onChange={e => setAutoCues(e.target.checked)} disabled={!analyzeAfter} />
+              <span className="text-[var(--color-text-dim)]">AUTO CUES</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] font-mono">
+              <input type="checkbox" checked={downloadArt} onChange={e => setDownloadArt(e.target.checked)} />
+              <span className="text-[var(--color-text-dim)]">COVER ART</span>
             </label>
             <button onClick={downloadSelected} disabled={downloading || !selected.size}
               className="glow-btn px-4 py-2 rounded text-[11px] font-mono flex items-center gap-2">
