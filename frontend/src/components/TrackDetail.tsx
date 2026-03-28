@@ -242,40 +242,47 @@ export default function TrackDetail({ track, onClose, onAnalyzed }: {
     const startPoint = Math.floor(scrollX * Math.max(0, totalPoints - visiblePoints));
     const barWidth = w / visiblePoints;
 
-    // --- CDJ/Serato-style stacked frequency waveform ---
+    // --- Serato-style frequency-colored waveform ---
+    // High-density vertical lines with RGB color from frequency content
+    // Serato standard: Red=bass, Green=mids, Blue=highs
+    ctx.lineWidth = Math.max(1, barWidth);
+
     for (let i = 0; i < visiblePoints && (startPoint + i) < totalPoints; i++) {
       const idx = startPoint + i;
       const amp = amplitudes[idx];
       const low = lows[idx];
       const mid = mids[idx];
       const high = highs[idx];
-      const x = i * barWidth;
-      const totalH = amp * midY * 0.85;
+      const x = Math.round(i * barWidth) + 0.5; // Align to pixel grid for crisp lines
+      const totalH = amp * midY * 0.92;
 
-      if (totalH < 0.5) continue;
+      if (totalH < 0.3) continue;
 
-      const sum = low + mid + high || 1;
-      const lowH = (low / sum) * totalH;
-      const midH = (mid / sum) * totalH;
-      const highH = (high / sum) * totalH;
+      // Serato RGB: direct frequency-to-channel mapping
+      // Bass → Red channel, Mids → Green channel, Highs → Blue channel
+      const r = Math.min(255, Math.round(low * 255));
+      const g = Math.min(255, Math.round(mid * 220));
+      const b = Math.min(255, Math.round(high * 255));
 
-      // Draw mirrored from center — bottom to top: lows, mids, highs
-      const bw = Math.max(barWidth - 0.3, 0.5);
+      // Brightness boost: ensure even quiet frequencies contribute some light
+      const boost = Math.round(amp * 40);
+      const fr = Math.min(255, r + boost);
+      const fg = Math.min(255, g + boost);
+      const fb = Math.min(255, b + boost);
 
-      // Lows (bass) — blue
-      ctx.fillStyle = `rgba(0, 100, 255, ${0.6 + low * 0.4})`;
-      ctx.fillRect(x, midY - lowH, bw, lowH);
-      ctx.fillRect(x, midY, bw, lowH);
+      // Draw vertical line from center outward (top half)
+      ctx.strokeStyle = `rgb(${fr}, ${fg}, ${fb})`;
+      ctx.beginPath();
+      ctx.moveTo(x, midY);
+      ctx.lineTo(x, midY - totalH);
+      ctx.stroke();
 
-      // Mids — green
-      ctx.fillStyle = `rgba(0, 220, 120, ${0.5 + mid * 0.5})`;
-      ctx.fillRect(x, midY - lowH - midH, bw, midH);
-      ctx.fillRect(x, midY + lowH, bw, midH);
-
-      // Highs — red/white
-      ctx.fillStyle = `rgba(255, 80, 80, ${0.4 + high * 0.6})`;
-      ctx.fillRect(x, midY - lowH - midH - highH, bw, highH);
-      ctx.fillRect(x, midY + lowH + midH, bw, highH);
+      // Bottom mirror (slightly dimmer, 70% height — Serato style)
+      ctx.strokeStyle = `rgba(${fr}, ${fg}, ${fb}, 0.6)`;
+      ctx.beginPath();
+      ctx.moveTo(x, midY);
+      ctx.lineTo(x, midY + totalH * 0.65);
+      ctx.stroke();
     }
 
     // --- Beat grid ---

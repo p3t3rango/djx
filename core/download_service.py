@@ -66,6 +66,9 @@ class DownloadService:
                     file_size=file_size, method=method, status="completed"
                 )
 
+                # Detect audio quality and store
+                self._detect_quality(track.track_id, file_path)
+
                 # Download and embed artwork
                 if download_art and track.artwork_url and file_path:
                     self._download_artwork(track, base_dir, file_path)
@@ -236,6 +239,45 @@ class DownloadService:
             if os.path.exists(filepath):
                 os.remove(filepath)
             return None
+
+    def _detect_quality(self, track_id: int, file_path: str):
+        """Detect bitrate, format, and sample rate of a downloaded audio file."""
+        try:
+            ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+            audio_format = ext if ext else 'mp3'
+            bitrate = None
+            sample_rate = None
+
+            if ext == 'mp3':
+                from mutagen.mp3 import MP3
+                info = MP3(file_path).info
+                bitrate = info.bitrate // 1000
+                sample_rate = info.sample_rate
+            elif ext in ('m4a', 'aac'):
+                from mutagen.mp4 import MP4
+                info = MP4(file_path).info
+                bitrate = info.bitrate // 1000
+                sample_rate = info.sample_rate
+            elif ext == 'flac':
+                from mutagen.flac import FLAC
+                info = FLAC(file_path).info
+                bitrate = info.bits_per_sample * info.sample_rate * info.channels // 1000
+                sample_rate = info.sample_rate
+                audio_format = 'flac'
+            elif ext == 'wav':
+                from mutagen.wave import WAVE
+                info = WAVE(file_path).info
+                bitrate = info.bits_per_sample * info.sample_rate * info.channels // 1000
+                sample_rate = info.sample_rate
+                audio_format = 'wav'
+
+            self.db.conn.execute(
+                "UPDATE downloads SET bitrate = ?, audio_format = ?, sample_rate = ? WHERE track_id = ?",
+                (bitrate, audio_format, sample_rate, track_id)
+            )
+            self.db.conn.commit()
+        except Exception:
+            pass
 
     def _download_artwork(self, track: Track, base_dir: str, audio_path: str):
         """Download cover art to artwork/ folder and embed in MP3 ID3 tags."""

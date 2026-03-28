@@ -3,7 +3,7 @@ import os
 import threading
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -422,6 +422,14 @@ def edit_metadata(track_id: int, req: EditMetadataRequest, db=Depends(get_db)):
             )
             updated = True
 
+    # Also update genre_folder in downloads table when genre changes
+    if req.genre is not None:
+        db.conn.execute(
+            "UPDATE downloads SET genre_folder = ? WHERE track_id = ?",
+            (req.genre, track_id)
+        )
+        updated = True
+
     if not updated:
         return {"error": "No fields to update"}
 
@@ -518,13 +526,18 @@ def list_playlists(db=Depends(get_db)):
     rows = db.conn.execute("SELECT * FROM playlists ORDER BY created_at DESC").fetchall()
     result = []
     for r in rows:
-        result.append({
+        d = {
             "id": r["id"],
             "name": r["name"],
             "track_ids": json.loads(r["track_ids_json"]),
             "track_count": len(json.loads(r["track_ids_json"])),
             "created_at": r["created_at"],
-        })
+        }
+        try:
+            d["cover_path"] = r["cover_path"]
+        except (IndexError, KeyError):
+            d["cover_path"] = None
+        result.append(d)
     return result
 
 
@@ -549,6 +562,36 @@ def delete_playlist(playlist_id: int, db=Depends(get_db)):
     db.conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
     db.conn.commit()
     return {"deleted": True}
+
+
+@router.post("/playlists/{playlist_id}/cover")
+async def upload_playlist_cover(playlist_id: int, request: Request, db=Depends(get_db)):
+    """Upload a custom cover image for a playlist."""
+    from core.utils import ensure_directory
+    body = await request.body()
+    if not body or len(body) < 100:
+        return {"error": "No image data"}
+
+    download_dir = db.get_setting("download_dir") or "downloads"
+    cover_dir = os.path.join(download_dir, "artwork", "playlists")
+    ensure_directory(cover_dir)
+
+    cover_path = os.path.join(cover_dir, f"playlist_{playlist_id}.jpg")
+    with open(cover_path, "wb") as f:
+        f.write(body)
+
+    db.conn.execute("UPDATE playlists SET cover_path = ? WHERE id = ?", (cover_path, playlist_id))
+    db.conn.commit()
+    return {"cover_path": cover_path}
+
+
+@router.get("/playlists/{playlist_id}/cover")
+def serve_playlist_cover(playlist_id: int, db=Depends(get_db)):
+    """Serve a playlist cover image."""
+    row = db.conn.execute("SELECT cover_path FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+    if not row or not row["cover_path"] or not os.path.exists(row["cover_path"]):
+        return {"error": "No cover"}
+    return FileResponse(row["cover_path"], media_type="image/jpeg")
 
 
 @router.delete("/{download_id}")

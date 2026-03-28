@@ -142,9 +142,17 @@ export default function PlayerBar() {
         </div>
 
         {/* Track info */}
-        <div className="flex-1 min-w-0 mx-2">
-          <div className="text-xs font-mono text-[var(--color-text)] truncate">{track.title}</div>
-          <div className="text-[10px] font-mono text-[var(--color-text-dim)] truncate">{track.artist}</div>
+        <div className="flex items-center gap-2.5 flex-1 min-w-0 mx-2">
+          {track.artwork_url ? (
+            <img src={track.artwork_url.replace('-large', '-small')} alt=""
+              className="w-11 h-11 rounded object-cover shrink-0 bg-[var(--color-surface-3)]" />
+          ) : (
+            <div className="w-11 h-11 rounded bg-[var(--color-surface-3)] shrink-0" />
+          )}
+          <div className="min-w-0">
+            <div className="text-xs font-mono text-[var(--color-text)] truncate">{track.title}</div>
+            <div className="text-[10px] font-mono text-[var(--color-text-dim)] truncate">{track.artist}</div>
+          </div>
         </div>
 
         {/* Time */}

@@ -20,6 +20,8 @@ export default function Downloads() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editData, setEditData] = useState({ title: '', artist: '', genre: '' });
   const [minEnergy, setMinEnergy] = useState<number>(0);
+  const [sortCol, setSortCol] = useState<string>('downloaded_at');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [exportFolder, setExportFolder] = useState('');
@@ -42,6 +44,14 @@ export default function Downloads() {
   const [newTagColor, setNewTagColor] = useState('#00ffc8');
   const player = usePlayer();
   const pageSize = 30;
+
+  // Auto-switch detail panel to currently playing track
+  useEffect(() => {
+    if (detailTrack && player.playingTrack && player.playingTrack.track_id !== detailTrack.track_id) {
+      const playing = downloads.find(d => d.track_id === player.playingTrack?.track_id);
+      if (playing) setDetailTrack(playing);
+    }
+  }, [player.playingTrack?.track_id]);
 
   useEffect(() => {
     api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
@@ -109,7 +119,12 @@ export default function Downloads() {
     if (!editingId) return;
     await api.editMetadata(editingId, editData);
     setEditingId(null);
+    // If genre changed while filtered, refresh genres and show all
+    if (editData.genre && editData.genre !== selectedGenre && selectedGenre) {
+      changeGenre('');
+    }
     loadDownloads();
+    api.getDownloadStats().then(s => { setStats(s); setGenres(Object.keys(s.by_genre || {})); });
   };
 
   const toggleSelect = (tid: number) => {
@@ -285,6 +300,29 @@ export default function Downloads() {
       return tt && tt.some((t: any) => t.id === selectedTag);
     });
   }
+
+  // Sort
+  const toggleSort = (col: string) => {
+    if (sortCol === col) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortCol(col);
+      setSortDir(col === 'title' || col === 'artist' || col === 'genre_folder' ? 'asc' : 'desc');
+    }
+  };
+
+  filtered = [...filtered].sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    if (typeof va === 'string') va = va.toLowerCase();
+    if (typeof vb === 'string') vb = vb.toLowerCase();
+    if (va < vb) return sortDir === 'asc' ? -1 : 1;
+    if (va > vb) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const sortIcon = (col: string) => sortCol === col ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
 
   const analyzedCount = analysisStats?.analyzed ?? downloads.filter(d => d.bpm != null).length;
   const unanalyzedCount = analysisStats?.unanalyzed ?? downloads.filter(d => d.bpm == null && d.file_path).length;
@@ -561,15 +599,16 @@ export default function Downloads() {
                   onChange={() => selected.size === filtered.length ? setSelected(new Set()) : setSelected(new Set(filtered.map(d => d.track_id)))} />
               </th>
               <th className="w-8"></th>
-              <th className="text-left px-2 py-2.5 tracking-wider">TITLE</th>
-              <th className="text-left px-2 py-2.5 tracking-wider">ARTIST</th>
-              <th className="text-right px-2 py-2.5 tracking-wider">BPM</th>
-              <th className="text-center px-2 py-2.5 tracking-wider">NRG</th>
-              <th className="text-left px-2 py-2.5 tracking-wider">KEY</th>
-              <th className="text-left px-2 py-2.5 tracking-wider">GENRE</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('title')}>TITLE{sortIcon('title')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('artist')}>ARTIST{sortIcon('artist')}</th>
+              <th className="text-right px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('bpm')}>BPM{sortIcon('bpm')}</th>
+              <th className="text-center px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('energy')}>NRG{sortIcon('energy')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('camelot_key')}>KEY{sortIcon('camelot_key')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('genre_folder')}>GENRE{sortIcon('genre_folder')}</th>
               <th className="text-left px-2 py-2.5 tracking-wider">TAGS</th>
-              <th className="text-right px-2 py-2.5 tracking-wider">SIZE</th>
-              <th className="w-20"></th>
+              <th className="text-center px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('bitrate')}>QUALITY{sortIcon('bitrate')}</th>
+              <th className="text-right px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('file_size_bytes')}>SIZE{sortIcon('file_size_bytes')}</th>
+              <th className="w-20 px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)] text-right" onClick={() => toggleSort('downloaded_at')}>DATE{sortIcon('downloaded_at')}</th>
             </tr>
           </thead>
           <tbody>
@@ -651,8 +690,10 @@ export default function Downloads() {
                         className="p-0.5 text-[var(--color-text-dim)] hover:text-[var(--color-glow)] transition-colors" title="Add tag">
                         <Plus size={10} />
                       </button>
-                      {showTagMenu === d.track_id && tags.length > 0 && (
-                        <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-surface)] border border-[var(--color-border)] rounded shadow-lg py-1 min-w-[100px]">
+                      {showTagMenu === d.track_id && (
+                        <>
+                        <div className="fixed inset-0 z-10" onClick={() => setShowTagMenu(null)} />
+                        <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-surface)] border border-[var(--color-border)] rounded shadow-lg py-1 min-w-[120px]">
                           {tags.filter(tag => !(trackTagsMap[d.track_id] || []).some((tt: any) => tt.id === tag.id)).map(tag => (
                             <button key={tag.id} onClick={() => assignTag(d.track_id, tag.id)}
                               className="w-full text-left px-3 py-1 text-[10px] font-mono text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-surface-3)] flex items-center gap-2">
@@ -660,14 +701,45 @@ export default function Downloads() {
                               {tag.name}
                             </button>
                           ))}
-                          {tags.filter(tag => !(trackTagsMap[d.track_id] || []).some((tt: any) => tt.id === tag.id)).length === 0 && (
-                            <span className="px-3 py-1 text-[9px] font-mono text-[var(--color-text-dim)]">All tags assigned</span>
-                          )}
+                          <div className="border-t border-[var(--color-border)] mt-1 pt-1 px-2 pb-1">
+                            <form onSubmit={async (e) => {
+                              e.preventDefault();
+                              const input = (e.target as HTMLFormElement).elements.namedItem('newTag') as HTMLInputElement;
+                              const name = input.value.trim();
+                              if (!name) return;
+                              const tag = await api.createTag(name, newTagColor);
+                              if (tag.id) {
+                                await assignTag(d.track_id, tag.id);
+                                loadTags();
+                              }
+                              input.value = '';
+                            }} className="flex items-center gap-1">
+                              <input type="color" value={newTagColor} onChange={e => setNewTagColor(e.target.value)}
+                                className="w-4 h-4 rounded border-none cursor-pointer" />
+                              <input name="newTag" placeholder="New tag..."
+                                className="w-20 bg-[var(--color-surface-3)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-[9px] font-mono text-[var(--color-text)]"
+                                autoFocus />
+                            </form>
+                          </div>
                         </div>
+                        </>
                       )}
                     </div>
                   </td>
+                  <td className="px-2 py-2 text-center">
+                    {d.bitrate ? (
+                      <span className={`text-[9px] font-mono font-bold ${
+                        d.bitrate >= 320 || d.audio_format === 'wav' || d.audio_format === 'flac' ? 'text-[var(--color-glow)]' :
+                        d.bitrate >= 256 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {d.audio_format?.toUpperCase()} {d.bitrate}
+                      </span>
+                    ) : <span className="text-[var(--color-text-dim)] text-[9px]">—</span>}
+                  </td>
                   <td className="px-2 py-2 text-right text-[var(--color-text-dim)]">{formatSize(d.file_size_bytes)}</td>
+                  <td className="px-2 py-2 text-right text-[9px] text-[var(--color-text-dim)]">
+                    {d.downloaded_at ? d.downloaded_at.slice(5, 10) : ''}
+                  </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center gap-0.5">
                       {isEditing ? (

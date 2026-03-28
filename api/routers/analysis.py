@@ -122,6 +122,50 @@ def clear_cues(track_id: int, db=Depends(get_db)):
     return {"cleared": True}
 
 
+@router.post("/detect-quality")
+def detect_quality_all(db=Depends(get_db)):
+    """Scan all downloaded files and detect audio quality (bitrate, format, sample rate)."""
+    import os
+    rows = db.conn.execute(
+        "SELECT track_id, file_path FROM downloads WHERE file_path IS NOT NULL AND bitrate IS NULL"
+    ).fetchall()
+    updated = 0
+    for row in rows:
+        fp = row["file_path"]
+        if not fp or not os.path.exists(fp):
+            continue
+        ext = os.path.splitext(fp)[1].lower().lstrip('.')
+        try:
+            bitrate, sample_rate, audio_format = None, None, ext or 'mp3'
+            if ext == 'mp3':
+                from mutagen.mp3 import MP3
+                info = MP3(fp).info
+                bitrate, sample_rate = info.bitrate // 1000, info.sample_rate
+            elif ext in ('m4a', 'aac'):
+                from mutagen.mp4 import MP4
+                info = MP4(fp).info
+                bitrate, sample_rate = info.bitrate // 1000, info.sample_rate
+            elif ext == 'flac':
+                from mutagen.flac import FLAC
+                info = FLAC(fp).info
+                bitrate = info.bits_per_sample * info.sample_rate * info.channels // 1000
+                sample_rate = info.sample_rate
+            elif ext == 'wav':
+                from mutagen.wave import WAVE
+                info = WAVE(fp).info
+                bitrate = info.bits_per_sample * info.sample_rate * info.channels // 1000
+                sample_rate = info.sample_rate
+            if bitrate:
+                db.conn.execute(
+                    "UPDATE downloads SET bitrate = ?, audio_format = ?, sample_rate = ? WHERE track_id = ?",
+                    (bitrate, audio_format, sample_rate, row["track_id"]))
+                updated += 1
+        except Exception:
+            pass
+    db.conn.commit()
+    return {"scanned": len(rows), "updated": updated}
+
+
 @router.get("/tracks")
 def analyzed_tracks(analyzed: Optional[bool] = None, limit: int = 100, offset: int = 0,
                     db=Depends(get_db)):

@@ -92,6 +92,10 @@ class Database:
             "ALTER TABLE tracks ADD COLUMN beats_json TEXT",
             "ALTER TABLE tracks ADD COLUMN cues_json TEXT",  # hot cues, memory cues, loops
             "ALTER TABLE tracks ADD COLUMN energy INTEGER",  # 1-10 energy level (Beatport scale)
+            "ALTER TABLE downloads ADD COLUMN bitrate INTEGER",  # kbps
+            "ALTER TABLE downloads ADD COLUMN audio_format TEXT",  # mp3, wav, flac, etc.
+            "ALTER TABLE downloads ADD COLUMN sample_rate INTEGER",  # Hz
+            "ALTER TABLE playlists ADD COLUMN cover_path TEXT",  # custom cover image path
         ]
         for sql in migrations:
             try:
@@ -236,7 +240,7 @@ class Database:
     def get_downloads(self, genre: str = None, status: str = None,
                       limit: int = 50, offset: int = 0,
                       min_energy: int = None, max_energy: int = None) -> List[dict]:
-        query = "SELECT d.id, d.track_id, d.genre_folder, d.file_path, d.file_size_bytes, d.download_method, d.status, d.downloaded_at, COALESCE(t.title, '') as title, COALESCE(t.artist, '') as artist, COALESCE(t.permalink_url, '') as permalink_url, COALESCE(t.playback_count, 0) as playback_count, t.bpm, t.musical_key, t.camelot_key, t.cues_json, t.analyzed_at, t.artwork_url, t.energy FROM downloads d LEFT JOIN tracks t ON d.track_id = t.track_id WHERE 1=1"
+        query = "SELECT d.id, d.track_id, d.genre_folder, d.file_path, d.file_size_bytes, d.download_method, d.status, d.downloaded_at, COALESCE(t.title, '') as title, COALESCE(t.artist, '') as artist, COALESCE(t.permalink_url, '') as permalink_url, COALESCE(t.playback_count, 0) as playback_count, t.bpm, t.musical_key, t.camelot_key, t.cues_json, t.analyzed_at, t.artwork_url, t.energy, d.bitrate, d.audio_format, d.sample_rate FROM downloads d LEFT JOIN tracks t ON d.track_id = t.track_id WHERE 1=1"
         params = []
         if genre:
             query += " AND d.genre_folder = ?"

@@ -100,181 +100,154 @@ def _compute_energy_envelope(audio: np.ndarray, frame_sec=0.5, hop_sec=0.125) ->
     return env
 
 
-def _snap_to_downbeat(time_sec: float, beats: List[float]) -> float:
-    """Snap a time position to the nearest downbeat (every 4 beats)."""
-    if not beats:
+def _generate_full_beat_grid(bpm: float, duration: float, first_beat: float = 0.0) -> List[float]:
+    """Generate a complete beat grid from BPM and duration."""
+    if bpm <= 0 or duration <= 0:
+        return []
+    period = 60.0 / bpm
+    beats = []
+    t = first_beat
+    while t < duration:
+        beats.append(round(t, 4))
+        t += period
+    return beats
+
+
+def _snap_to_downbeat(time_sec: float, downbeats: List[float]) -> float:
+    """Snap a time to the nearest downbeat."""
+    if not downbeats:
         return time_sec
-
-    # Get downbeats (every 4th beat)
-    downbeats = beats[::4] if len(beats) > 4 else beats
-
-    # Find closest downbeat
     closest = min(downbeats, key=lambda b: abs(b - time_sec))
     return closest
 
 
 def generate_auto_cues(audio: np.ndarray, beats: List[float], bpm: float, duration: float) -> List[dict]:
-    """Generate 8 hot cue points based on structural analysis.
+    """Generate 8 hot cue points using bar-level energy analysis.
 
-    Uses energy envelope + spectral flux to detect drops, breakdowns,
-    builds, intros, and outros. Snaps to nearest downbeat.
+    Places cues on exact downbeats where energy changes sharply:
+    - DROP: the first loud bar after a quiet section
+    - BREAK: the first quiet bar after a loud section
+    - INTRO: first downbeat
+    - OUTRO: where energy dies near the end
     """
-    if duration < 30 or not beats or bpm <= 0:
+    if duration < 30 or bpm <= 0:
         return []
 
-    hop_sec = 0.125
-    env = _compute_energy_envelope(audio, frame_sec=0.5, hop_sec=hop_sec)
-
-    if len(env) < 10:
-        return []
-
-    # Normalize envelope to 0-1
-    env_min, env_max = env.min(), env.max()
-    if env_max - env_min < 1e-6:
-        return []
-    env_norm = (env - env_min) / (env_max - env_min)
-
-    # Compute derivative (energy change rate)
-    deriv = np.diff(env_norm)
-
-    # Compute time array for each envelope frame
-    times = np.arange(len(env_norm)) * hop_sec
-
-    # Minimum distance between cues: 16 beats
     beat_period = 60.0 / bpm
-    min_dist = beat_period * 16
+    bar_len = beat_period * 4
 
-    # --- Detect structural points ---
-    detected = []  # (time, type, strength)
+    # Generate full beat grid
+    first_beat = beats[0] if beats else 0.0
+    full_beats = _generate_full_beat_grid(bpm, duration, first_beat)
+    if len(full_beats) < 16:
+        return []
 
-    # Track regions
-    track_25 = duration * 0.25
-    track_75 = duration * 0.75
+    # Downbeats (start of each bar)
+    downbeats = full_beats[::4]
 
-    # Adaptive thresholds based on track dynamics
-    deriv_std = float(np.std(deriv)) if len(deriv) > 0 else 0.1
-    drop_thresh = max(0.05, deriv_std * 1.5)
-    break_thresh = max(0.04, deriv_std * 1.2)
+    # Compute energy per bar
+    rms_algo = es.RMS()
+    bar_e = []
+    for db in downbeats:
+        s = int(db * SAMPLE_RATE)
+        e = int(min((db + bar_len) * SAMPLE_RATE, len(audio)))
+        if e - s < 1000:
+            bar_e.append(0.0)
+            continue
+        bar_e.append(float(rms_algo(audio[s:e])))
 
-    # 1. Find drops: positive derivative spikes (energy increases)
-    for i in range(1, len(deriv) - 1):
-        if deriv[i] > drop_thresh and deriv[i] > deriv[i - 1] and deriv[i] > deriv[i + 1]:
-            t = times[i]
-            detected.append((t, "drop", float(deriv[i])))
+    if not bar_e:
+        return []
 
-    # 2. Find breakdowns: negative derivative dips (energy decreases)
-    for i in range(1, len(deriv) - 1):
-        if deriv[i] < -break_thresh and deriv[i] < deriv[i - 1] and deriv[i] < deriv[i + 1]:
-            t = times[i]
-            detected.append((t, "breakdown", float(abs(deriv[i]))))
+    bar_e = np.array(bar_e)
+    e_max = bar_e.max()
+    if e_max < 1e-8:
+        return []
+    bar_e = bar_e / e_max
 
-    # 3. Find builds: sustained rising energy (positive derivative over 4+ seconds)
-    window = int(4.0 / hop_sec)
-    build_thresh = max(0.01, deriv_std * 0.3)
-    for i in range(window, len(deriv)):
-        segment = deriv[i - window:i]
-        if np.mean(segment) > build_thresh and np.min(segment) > -build_thresh:
-            t = times[i - window]
-            detected.append((t, "build", float(np.mean(segment))))
+    # Bar-to-bar energy changes
+    diffs = np.diff(bar_e)
 
-    # Sort by strength and deduplicate (min distance)
-    detected.sort(key=lambda x: x[2], reverse=True)
-    filtered = []
-    for t, typ, strength in detected:
-        if all(abs(t - ft) > min_dist for ft, _, _ in filtered):
-            filtered.append((t, typ, strength))
+    # Adaptive threshold: use the standard deviation of energy changes
+    diff_std = float(np.std(diffs)) if len(diffs) > 0 else 0.1
+    rise_thresh = max(0.15, diff_std * 2.0)  # Significant energy rise
+    fall_thresh = max(0.15, diff_std * 2.0)  # Significant energy fall
 
-    # --- Assign 8 cue slots ---
+    # Find DROPS: bars where energy rises significantly
+    # Cue goes on the bar that IS loud (the arrival)
+    drops = []
+    for i in range(len(diffs)):
+        if diffs[i] > rise_thresh:
+            drops.append((i + 1, float(diffs[i])))
+
+    # Find BREAKS: bars where energy falls significantly
+    # Cue goes on the bar that IS quiet (the drop-off)
+    breaks = []
+    for i in range(len(diffs)):
+        if diffs[i] < -fall_thresh:
+            breaks.append((i + 1, float(abs(diffs[i]))))
+
+    # Sort by strength
+    drops.sort(key=lambda x: x[1], reverse=True)
+    breaks.sort(key=lambda x: x[1], reverse=True)
+
+    # Build candidates with minimum spacing of 8 bars
+    min_bars = 8
+    candidates = []
+
+    # INTRO: always bar 0
+    candidates.append((0, "INTRO", 1.0))
+
+    # Add drops (strongest first)
+    for bar_idx, strength in drops:
+        if bar_idx < len(downbeats) and all(abs(bar_idx - c[0]) >= min_bars for c in candidates):
+            candidates.append((bar_idx, "DROP", strength))
+
+    # Add breaks (strongest first)
+    for bar_idx, strength in breaks:
+        if bar_idx < len(downbeats) and all(abs(bar_idx - c[0]) >= min_bars for c in candidates):
+            candidates.append((bar_idx, "BREAK", strength))
+
+    # OUTRO: find where energy dies near the end
+    for i in range(len(bar_e) - 1, max(0, len(bar_e) - 10), -1):
+        if bar_e[i] < 0.15 and i > 0 and bar_e[i - 1] > 0.3:
+            if all(abs(i - c[0]) >= min_bars for c in candidates):
+                candidates.append((i, "OUTRO", 0.5))
+            break
+
+    # Fill remaining slots with 16-bar phrase boundaries
+    if len(candidates) < 8:
+        for bar_idx in range(16, len(downbeats) - 4, 16):
+            if all(abs(bar_idx - c[0]) >= min_bars for c in candidates):
+                candidates.append((bar_idx, "CUE", 0.1))
+
+    # Sort by time, take top 8
+    candidates.sort(key=lambda x: x[0])
+    candidates = candidates[:8]
+
+    # Assign labels with counting
+    drop_n = 0
+    break_n = 0
     cues = []
+    for i, (bar_idx, label, _) in enumerate(candidates):
+        t = downbeats[bar_idx] if bar_idx < len(downbeats) else duration * 0.9
+        name = label
+        if label == "DROP":
+            drop_n += 1
+            name = f"DROP {drop_n}" if drop_n > 1 else "DROP"
+        elif label == "BREAK":
+            break_n += 1
+            name = f"BREAK {break_n}" if break_n > 1 else "BREAK"
 
-    # Cue 1: INTRO (first downbeat or start)
-    intro_time = _snap_to_downbeat(beats[0] if beats else 0, beats)
-    cues.append({"name": "INTRO", "type": "cue", "start": round(intro_time, 3), "num": 0})
+        cues.append({
+            "name": name,
+            "type": "cue",
+            "start": round(t, 3),
+            "num": i,
+            "end": None,
+        })
 
-    # Cue 2: VERSE (first energy rise in first 25%)
-    verse_candidates = [(t, s) for t, typ, s in filtered if t < track_25 and typ in ("drop", "build")]
-    if verse_candidates:
-        verse_t = _snap_to_downbeat(verse_candidates[0][0], beats)
-        cues.append({"name": "VERSE", "type": "cue", "start": round(verse_t, 3), "num": 1})
-
-    # Cue 3: BUILD (first build before the biggest drop)
-    drops = [(t, s) for t, typ, s in filtered if typ == "drop"]
-    builds = [(t, s) for t, typ, s in filtered if typ == "build"]
-    if builds:
-        # Prefer build closest before the first drop
-        if drops:
-            pre_drop_builds = [(t, s) for t, s in builds if t < drops[0][0]]
-            if pre_drop_builds:
-                build_t = _snap_to_downbeat(pre_drop_builds[-1][0], beats)
-            else:
-                build_t = _snap_to_downbeat(builds[0][0], beats)
-        else:
-            build_t = _snap_to_downbeat(builds[0][0], beats)
-        cues.append({"name": "BUILD", "type": "cue", "start": round(build_t, 3), "num": 2})
-
-    # Cue 4: DROP 1 (biggest drop)
-    if drops:
-        drop1_t = _snap_to_downbeat(drops[0][0], beats)
-        cues.append({"name": "DROP 1", "type": "cue", "start": round(drop1_t, 3), "num": 3})
-
-    # Cue 5: BREAK (first breakdown after drop 1)
-    breakdowns = [(t, s) for t, typ, s in filtered if typ == "breakdown"]
-    if drops and breakdowns:
-        post_drop = [(t, s) for t, s in breakdowns if t > drops[0][0]]
-        if post_drop:
-            break_t = _snap_to_downbeat(post_drop[0][0], beats)
-            cues.append({"name": "BREAK", "type": "cue", "start": round(break_t, 3), "num": 4})
-
-    # Cue 6: DROP 2 (second biggest drop, if exists)
-    if len(drops) > 1:
-        drop2_t = _snap_to_downbeat(drops[1][0], beats)
-        cues.append({"name": "DROP 2", "type": "cue", "start": round(drop2_t, 3), "num": 5})
-
-    # Cue 7: BRIDGE (second breakdown or breakdown in second half)
-    if len(breakdowns) > 1:
-        bridge_t = _snap_to_downbeat(breakdowns[1][0], beats)
-        cues.append({"name": "BRIDGE", "type": "cue", "start": round(bridge_t, 3), "num": 6})
-
-    # Cue 8: OUTRO (energy drop in last 25%)
-    outro_candidates = [(t, s) for t, typ, s in filtered if t > track_75 and typ == "breakdown"]
-    if outro_candidates:
-        outro_t = _snap_to_downbeat(outro_candidates[0][0], beats)
-    else:
-        # Fallback: 75% of the track
-        outro_t = _snap_to_downbeat(duration * 0.75, beats)
-    cues.append({"name": "OUTRO", "type": "cue", "start": round(outro_t, 3), "num": 7})
-
-    # Fill empty slots with evenly spaced phrase markers
-    used_nums = {c["num"] for c in cues}
-    used_times = {c["start"] for c in cues}
-    if len(cues) < 8:
-        # Divide track into segments and place cues at phrase boundaries
-        bar_len = beat_period * 4
-        # Try 16-bar phrases first, then 32-bar
-        phrase_len = bar_len * 16
-        candidate_times = []
-        t = phrase_len
-        while t < duration * 0.92:
-            snap_t = _snap_to_downbeat(t, beats)
-            # Don't place too close to existing cues
-            if all(abs(snap_t - et) > min_dist * 0.5 for et in used_times):
-                candidate_times.append(snap_t)
-            t += phrase_len
-
-        for num in range(8):
-            if num not in used_nums and len(cues) < 8 and candidate_times:
-                snap_t = candidate_times.pop(0)
-                used_times.add(snap_t)
-                cues.append({
-                    "name": CUE_LABELS[num] if num < len(CUE_LABELS) else f"CUE {num + 1}",
-                    "type": "cue",
-                    "start": round(snap_t, 3),
-                    "num": num,
-                })
-
-    # Sort by cue number
-    cues.sort(key=lambda c: c["num"])
-    return cues[:8]
+    return cues
 
 
 def analyze_track(file_path: str) -> AnalysisResult:
