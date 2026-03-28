@@ -135,14 +135,22 @@ class DownloadService:
 
     def _try_ytdlp(self, track: Track, output_dir: str) -> Optional[str]:
         ytdlp = _find_executable("yt-dlp")
-        if not ytdlp:
-            return None
         template = os.path.join(output_dir, f"{track.safe_filename}.%(ext)s")
-        cmd = [
-            ytdlp, "-x", "--audio-format", "mp3", "--audio-quality", "0",
-            "--no-overwrites", "--no-warnings", "--quiet",
-            "-o", template, track.permalink_url,
-        ]
+        if ytdlp:
+            cmd = [
+                ytdlp, "-x", "--audio-format", "mp3", "--audio-quality", "0",
+                "--no-overwrites", "--no-warnings", "--quiet",
+                "-o", template, track.permalink_url,
+            ]
+        else:
+            # Fallback: run as Python module (pip-installed without PATH binary)
+            import sys
+            cmd = [
+                sys.executable, "-m", "yt_dlp",
+                "-x", "--audio-format", "mp3", "--audio-quality", "0",
+                "--no-overwrites", "--no-warnings", "--quiet",
+                "-o", template, track.permalink_url,
+            ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
