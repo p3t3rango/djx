@@ -115,7 +115,34 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         });
       };
 
+      let retried = false;
       const onError = () => {
+        // Retry once with a fresh stream URL (SoundCloud URLs can expire)
+        if (!retried) {
+          retried = true;
+          fetch(`/api/stream/${track.track_id}`)
+            .then(r => r.json())
+            .then(retry => {
+              if (retry.url && retry.type !== 'embed') {
+                audio.src = retry.url;
+                audio.play().catch(() => {
+                  cleanup();
+                  setIsLoading(false);
+                  setFailed(true);
+                });
+              } else {
+                cleanup();
+                setIsLoading(false);
+                setFailed(true);
+              }
+            })
+            .catch(() => {
+              cleanup();
+              setIsLoading(false);
+              setFailed(true);
+            });
+          return;
+        }
         cleanup();
         setIsLoading(false);
         setFailed(true);
@@ -156,32 +183,34 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [isPlaying]);
 
   const play = useCallback((track: PlayerTrack) => {
-    // Same track — toggle pause/resume
+    // Same track — toggle pause/resume (but only if not failed and audio exists)
     if (playingTrack?.track_id === track.track_id) {
-      if (isLoading) return; // still loading, ignore
-      if (audioRef.current) {
+      if (isLoading) return;
+      if (audioRef.current && !failed) {
         togglePlayPause();
         return;
       }
     }
-    // New track — cleanup first
+    // New track or retry after failure — reload
     cleanup();
+    setFailed(false);
     setQueue([track]);
     setQueueIndex(0);
     loadTrack(track);
-  }, [playingTrack, isLoading, togglePlayPause, loadTrack, cleanup]);
+  }, [playingTrack, isLoading, failed, togglePlayPause, loadTrack, cleanup]);
 
   const playFromQueue = useCallback((tracks: PlayerTrack[], startIndex: number) => {
-    // Same track — toggle pause/resume
+    // Same track — toggle pause/resume (but only if not failed and audio exists)
     if (playingTrack?.track_id === tracks[startIndex]?.track_id) {
-      if (isLoading) return; // still loading, ignore
-      if (audioRef.current) {
+      if (isLoading) return;
+      if (audioRef.current && !failed) {
         togglePlayPause();
         return;
       }
     }
-    // New track — cleanup first
+    // New track or retry — reload
     cleanup();
+    setFailed(false);
     setQueue(tracks);
     setQueueIndex(startIndex);
     loadTrack(tracks[startIndex]);

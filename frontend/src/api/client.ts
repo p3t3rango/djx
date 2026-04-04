@@ -11,10 +11,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   // Discovery
   getGenres: () => request<Record<string, { display_name: string; folder: string }>>('/discovery/genres'),
-  discover: (genre: string, count: number, include_remixes: boolean, sort = 'trending') =>
+  discover: (genre: string, count: number, include_remixes: boolean, sort = 'trending', analyze_on_discover = false) =>
     request<{ task_id: string }>('/discovery/discover', {
       method: 'POST',
-      body: JSON.stringify({ genre, count, include_remixes, sort }),
+      body: JSON.stringify({ genre, count, include_remixes, sort, analyze_on_discover }),
     }),
   discoverRelated: (track_id: number, limit = 50) =>
     request<{ task_id: string }>('/discovery/related', {

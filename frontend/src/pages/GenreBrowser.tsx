@@ -29,8 +29,11 @@ export default function GenreBrowser() {
   const [analyzeAfter, setAnalyzeAfter] = useState(false);
   const [autoCues, setAutoCues] = useState(false);
   const [downloadArt, setDownloadArt] = useState(true);
+  const [analyzeOnDiscover, setAnalyzeOnDiscover] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [relatedInput, setRelatedInput] = useState('');
+  const [sortCol, setSortCol] = useState<string>('trending_score');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const player = usePlayer();
 
   useEffect(() => { api.getGenres().then(setGenres); }, []);
@@ -45,7 +48,7 @@ export default function GenreBrowser() {
     setSelected(new Set());
     setMessage('Connecting to SoundCloud...');
 
-    const { task_id } = await api.discover(genre, count, includeRemixes, sort);
+    const { task_id } = await api.discover(genre, count, includeRemixes, sort, analyzeOnDiscover);
     pollTask(task_id);
   };
 
@@ -133,6 +136,30 @@ export default function GenreBrowser() {
   const scoreColor = (s: number) => s >= thresholds.viral ? 'score-viral' : s >= thresholds.hot ? 'score-hot' : s >= thresholds.rising ? 'score-rising' : 'score-steady';
   const scoreLabel = (s: number) => s >= thresholds.viral ? 'VIRAL' : s >= thresholds.hot ? 'HOT' : s >= thresholds.rising ? 'RISING' : '';
 
+  const toggleSort = (col: string) => {
+    if (sortCol === col) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortCol(col);
+      setSortDir(col === 'title' || col === 'artist' || col === 'genre' || col === 'camelot_key' ? 'asc' : 'desc');
+    }
+  };
+
+  const sortArrow = (col: string) => sortCol === col ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
+
+  const sortTracks = (list: any[]) => {
+    return [...list].sort((a, b) => {
+      let va = a[sortCol], vb = b[sortCol];
+      if (va == null) va = sortDir === 'asc' ? '\uffff' : '';
+      if (vb == null) vb = sortDir === 'asc' ? '\uffff' : '';
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
   const renderTable = (trackList: any[], title?: string) => (
     <div className={title ? 'mt-6' : ''}>
       {title && <h3 className="text-xs font-mono text-[var(--color-glow)] tracking-widest mb-3">{title}</h3>}
@@ -151,16 +178,20 @@ export default function GenreBrowser() {
                   }} />
               </th>
               <th className="w-8"></th>
-              <th className="text-left px-2 py-2.5 tracking-wider">TITLE</th>
-              <th className="text-left px-2 py-2.5 tracking-wider">ARTIST</th>
-              <th className="text-left px-2 py-2.5 tracking-wider">GENRE</th>
-              <th className="text-right px-2 py-2.5 tracking-wider">PLAYS</th>
-              <th className="text-right px-3 py-2.5 tracking-wider">SCORE</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('title')}>TITLE{sortArrow('title')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('artist')}>ARTIST{sortArrow('artist')}</th>
+              <th className="text-right px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('bpm')}>BPM{sortArrow('bpm')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('camelot_key')}>KEY{sortArrow('camelot_key')}</th>
+              <th className="text-center px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('energy')}>NRG{sortArrow('energy')}</th>
+              <th className="text-left px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('genre')}>GENRE{sortArrow('genre')}</th>
+              <th className="text-center px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('bitrate')}>QUALITY{sortArrow('bitrate')}</th>
+              <th className="text-right px-2 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('playback_count')}>PLAYS{sortArrow('playback_count')}</th>
+              <th className="text-right px-3 py-2.5 tracking-wider cursor-pointer hover:text-[var(--color-glow)]" onClick={() => toggleSort('trending_score')}>SCORE{sortArrow('trending_score')}</th>
               <th className="w-8"></th>
             </tr>
           </thead>
           <tbody>
-            {trackList.map((t: any, idx: number) => {
+            {sortTracks(trackList).map((t: any, idx: number) => {
               const score = Math.round(t.trending_score);
               const isActive = player.playingTrack?.track_id === t.track_id || player.embedTrack?.track_id === t.track_id;
               const isThisPlaying = player.playingTrack?.track_id === t.track_id && player.isPlaying;
@@ -188,8 +219,27 @@ export default function GenreBrowser() {
                       <span className="truncate text-[var(--color-text)]">{t.title}</span>
                     </div>
                   </td>
-                  <td className="px-2 py-2 max-w-[160px] truncate text-[var(--color-text-dim)]">{t.artist}</td>
-                  <td className="px-2 py-2 max-w-[140px] truncate text-[var(--color-text-dim)] text-[10px]">{t.genre || ''}</td>
+                  <td className="px-2 py-2 max-w-[140px] truncate text-[var(--color-text-dim)]">{t.artist}</td>
+                  <td className="px-2 py-2 text-right">
+                    {t.bpm ? <span className="text-[var(--color-glow)]">{Math.round(t.bpm)}</span> : <span className="text-[var(--color-text-dim)]">—</span>}
+                  </td>
+                  <td className="px-2 py-2">
+                    {t.camelot_key ? <span className="text-[var(--color-glow)]">{t.camelot_key}</span> : <span className="text-[var(--color-text-dim)]">—</span>}
+                  </td>
+                  <td className="px-2 py-2 text-center">
+                    {t.energy ? (
+                      <span className={`font-bold text-[10px] ${t.energy >= 7 ? 'text-red-400' : t.energy >= 4 ? 'text-yellow-400' : 'text-cyan-400'}`}>{t.energy}</span>
+                    ) : <span className="text-[var(--color-text-dim)]">—</span>}
+                  </td>
+                  <td className="px-2 py-2 max-w-[100px] truncate text-[var(--color-text-dim)] text-[10px]">{t.genre || ''}</td>
+                  <td className="px-2 py-2 text-center">
+                    {t.bitrate ? (
+                      <span className={`text-[9px] font-bold ${
+                        t.bitrate >= 320 || t.audio_format === 'wav' || t.audio_format === 'flac' ? 'text-[var(--color-glow)]' :
+                        t.bitrate >= 256 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>{t.audio_format?.toUpperCase()} {t.bitrate}</span>
+                    ) : t.downloaded ? <span className="text-[9px] text-[var(--color-text-dim)]">DL'd</span> : <span className="text-[var(--color-text-dim)]">—</span>}
+                  </td>
                   <td className="px-2 py-2 text-right text-[var(--color-text-dim)]">{formatPlays(t.playback_count)}</td>
                   <td className="px-3 py-2 text-right">
                     <span className={scoreColor(score)}>{score}</span>
@@ -217,7 +267,7 @@ export default function GenreBrowser() {
       {/* Sort mode tabs */}
       <div className="flex gap-1 mb-5 border-b border-[var(--color-border)] pb-3">
         {SORT_TABS.map(({ mode, label, icon: Icon, desc }) => (
-          <button key={mode} onClick={() => { setSortMode(mode); if (mode !== 'related' && selectedGenre) discover(selectedGenre, mode); }}
+          <button key={mode} onClick={() => { setSortMode(mode); setTracks([]); setRemixTracks([]); setMessage(''); }}
             className={`flex items-center gap-1.5 px-4 py-2 rounded text-[11px] font-mono tracking-wide transition-all ${
               sortMode === mode
                 ? 'bg-[var(--color-glow-dim)] text-[var(--color-glow)] glow-border-strong border'
@@ -272,6 +322,17 @@ export default function GenreBrowser() {
             <input type="checkbox" checked={includeRemixes} onChange={e => setIncludeRemixes(e.target.checked)} />
             REMIXES
           </label>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={analyzeOnDiscover} onChange={e => {
+              setAnalyzeOnDiscover(e.target.checked);
+              if (e.target.checked && count > 10) setCount(10);
+            }} />
+            <Zap size={11} className={analyzeOnDiscover ? 'text-[var(--color-glow)]' : ''} />
+            ANALYZE
+          </label>
+          {analyzeOnDiscover && (
+            <span className="text-[9px] text-yellow-400">~{count * 8}s for {count} tracks</span>
+          )}
           <div className="flex-1" />
           <div className="flex items-center gap-3 text-[10px]">
             <span>SCORE:</span>

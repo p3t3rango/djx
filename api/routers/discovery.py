@@ -17,6 +17,7 @@ class DiscoverRequest(BaseModel):
     include_remixes: bool = False
     include_curated: bool = True
     sort: str = "trending"  # trending, popular, fresh
+    analyze_on_discover: bool = False
 
 
 class RelatedRequest(BaseModel):
@@ -24,7 +25,7 @@ class RelatedRequest(BaseModel):
     limit: int = 50
 
 
-def _run_discover(task, sc, db_path, genre, count, include_remixes, include_curated, sort):
+def _run_discover(task, sc, db_path, genre, count, include_remixes, include_curated, sort, analyze_on_discover=False):
     from core.database import Database
     from core.discovery_service import DiscoveryService
     task.status = "running"
@@ -35,7 +36,94 @@ def _run_discover(task, sc, db_path, genre, count, include_remixes, include_cura
             genre, count, include_curated, sort=sort,
             on_progress=lambda msg: setattr(task, 'message', msg)
         )
-        result = {"tracks": [t.model_dump() for t in tracks]}
+        # Enrich with existing DB analysis data (BPM, key, energy, quality)
+        def enrich(track_list):
+            enriched = []
+            for t in track_list:
+                d = t.model_dump()
+                row = thread_db.conn.execute("""
+                    SELECT t.bpm, t.musical_key, t.camelot_key, t.energy,
+                           dl.bitrate, dl.audio_format, dl.file_path
+                    FROM tracks t
+                    LEFT JOIN downloads dl ON t.track_id = dl.track_id
+                    WHERE t.track_id = ?
+                """, (t.track_id,)).fetchone()
+                if row:
+                    d["bpm"] = row["bpm"]
+                    d["musical_key"] = row["musical_key"]
+                    d["camelot_key"] = row["camelot_key"]
+                    d["energy"] = row["energy"]
+                    d["bitrate"] = row["bitrate"]
+                    d["audio_format"] = row["audio_format"]
+                    d["downloaded"] = row["file_path"] is not None
+                enriched.append(d)
+            return enriched
+
+        # Analyze on discover: stream preview + quick BPM/key/energy detection
+        if analyze_on_discover:
+            import tempfile, os, requests as req
+            from core.analysis_service import analyze_track
+
+            for i, t in enumerate(tracks):
+                # Skip if already analyzed in DB
+                row = thread_db.conn.execute(
+                    "SELECT bpm FROM tracks WHERE track_id = ? AND bpm IS NOT NULL", (t.track_id,)
+                ).fetchone()
+                if row:
+                    continue
+
+                task.message = f"Analyzing {i+1}/{len(tracks)}: {t.title[:30]}..."
+
+                # Get stream URL
+                try:
+                    sc_track = sc.get_track(t.track_id)
+                    if not sc_track or not hasattr(sc_track, 'media') or not sc_track.media:
+                        continue
+                    stream_url = None
+                    for tc in (sc_track.media.transcodings or []):
+                        if not tc.url:
+                            continue
+                        protocol = getattr(tc.format, 'protocol', '') if tc.format else ''
+                        if protocol == 'progressive':
+                            sep = '&' if '?' in tc.url else '?'
+                            resp = req.get(f"{tc.url}{sep}client_id={sc.client_id}", timeout=10)
+                            if resp.status_code == 200:
+                                stream_url = resp.json().get('url')
+                                break
+                    if not stream_url:
+                        continue
+
+                    # Download to temp file (first 30 seconds worth)
+                    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                        tmp_path = tmp.name
+                        resp = req.get(stream_url, stream=True, timeout=30)
+                        downloaded = 0
+                        for chunk in resp.iter_content(8192):
+                            tmp.write(chunk)
+                            downloaded += len(chunk)
+                            if downloaded > 2_000_000:  # ~2MB = ~30sec of 128kbps
+                                break
+
+                    # Quick analysis
+                    result_a = analyze_track(tmp_path)
+                    if result_a.success:
+                        thread_db.conn.execute("""
+                            UPDATE tracks SET bpm = ?, musical_key = ?, camelot_key = ?,
+                                energy = ?, analyzed_at = datetime('now')
+                            WHERE track_id = ? AND bpm IS NULL
+                        """, (result_a.bpm, result_a.musical_key, result_a.camelot_key,
+                              result_a.energy, t.track_id))
+                        thread_db.conn.commit()
+
+                    os.unlink(tmp_path)
+                except Exception:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                    continue
+
+        result = {"tracks": enrich(tracks)}
 
         if include_remixes:
             task.message = "Discovering remixes..."
@@ -43,7 +131,7 @@ def _run_discover(task, sc, db_path, genre, count, include_remixes, include_cura
                 genre, count,
                 on_progress=lambda msg: setattr(task, 'message', msg)
             )
-            result["remix_tracks"] = [t.model_dump() for t in remix_tracks]
+            result["remix_tracks"] = enrich(remix_tracks)
 
         task.result = result
         task.status = "completed"
@@ -86,7 +174,7 @@ def discover(req: DiscoverRequest, db=Depends(get_db), sc=Depends(get_sc)):
     t = threading.Thread(
         target=_run_discover,
         args=(task, sc, db.db_path, req.genre, req.count,
-              req.include_remixes, req.include_curated, req.sort),
+              req.include_remixes, req.include_curated, req.sort, req.analyze_on_discover),
         daemon=True
     )
     t.start()
